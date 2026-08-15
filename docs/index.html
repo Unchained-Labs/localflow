@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>localflow — a board for the Claude sessions on your machine</title>
+<meta name="description" content="A Kanban board and orchestrator for the Claude Code sessions already running on your own machine. Live lanes, cost priced from real token counts, and the fan-out that actually happened, exported as a graph spec.">
+<meta property="og:title" content="localflow — a board for the Claude sessions on your machine">
+<meta property="og:description" content="A Kanban board and orchestrator for the Claude Code sessions already running on your own machine. Live lanes, cost priced from real token counts, and the fan-out that actually happened, exported as a graph spec.">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/brand.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="https://unchained-labs.github.io/" aria-label="Unchained Labs">
+      <img src="assets/lockup-horizontal.svg" alt="Unchained Labs" style="height:22px">
+    </a>
+    <nav>
+      <a href="#board">The board</a>
+      <a href="#cost">Cost</a>
+      <a href="#graph">The graph that ran</a>
+      <a href="#actions">Orchestrating</a>
+      <a href="#safety">Safety</a>
+      <a href="https://github.com/Unchained-Labs/localflow">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="wrap">
+    <p class="label">localflow</p>
+    <h1>Four terminals open. Two of them are waiting for you.</h1>
+    <p class="lead">You have several Claude Code sessions running right now. One is working, some are blocked on a question you have not noticed, and one of them has quietly spent more than the rest of the week combined. localflow reads the registry and the transcripts already on your disk and puts all of it on one board.</p>
+    <ul class="badges">
+      <li class="badge warn">alpha</li>
+      <li class="badge up">62 tests passing</li>
+      <li class="badge up">zero runtime deps</li>
+      <li class="badge accent">reads only your own disk</li>
+      <li class="badge ">MIT</li>
+    </ul>
+    <div class="btn-row">
+      <a class="btn primary" href="https://github.com/Unchained-Labs/localflow#install">npx localflow</a>
+      <a class="btn " href="https://github.com/Unchained-Labs/localflow">GitHub</a>
+    </div>
+    <figure class="demo hero-demo">
+      <video src="assets/demo.mp4" poster="assets/demo-poster.jpg" autoplay loop muted playsinline preload="auto" aria-label="localflow terminal demo"></video>
+      <figcaption>Real output from a real machine. Nine sessions, priced from their own transcripts.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="board">
+  <div class="wrap">
+    <p class="label">The board</p>
+    <h2>Four lanes, and deliberately no fifth</h2>
+    <p class="narrow">Every Claude Code session on the machine, live. The lane mapping is dull on purpose, because every interesting version of it involves guessing.</p>
+    <figure class="demo">
+      <img src="assets/board.png" alt="The localflow board: four lanes of live Claude Code sessions with tokens, cost and cache share" loading="lazy" decoding="async" style="width:100%;height:auto;display:block;border-radius:inherit">
+      <figcaption>Nine real sessions on one machine. The bar under each card is the share of input tokens served from cache — the single biggest lever on what a session costs.</figcaption>
+    </figure>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>Lane</th>
+          <th>What it means</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>running</strong></td>
+            <td>The registry says <code>busy</code>. The model is working.</td>
+          </tr>
+          <tr>
+            <td><strong>queued</strong></td>
+            <td>Idle with prompts enqueued and not yet started.</td>
+          </tr>
+          <tr>
+            <td><strong>waiting on you</strong></td>
+            <td>Idle with an empty queue. It wants an answer — and a session blocked on a question is invisible from the terminal you are not looking at.</td>
+          </tr>
+          <tr>
+            <td><strong>ended</strong></td>
+            <td>Gone from the registry.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note warn">
+      <p><strong>There is no &quot;done&quot; lane.</strong> Nothing on your disk records whether a session achieved what it was asked to do — only that it stopped. A board that rendered &quot;ended&quot; as &quot;went well&quot; would be inventing the one fact you most want, which is the same defect <a href="https://unchained-labs.github.io/authsweep/">authsweep</a> calls a false clean, wearing a green tick.</p>
+    </div>
+    <pre class="term"><code><span class="p">$</span> <span class="c">localflow board</span>
+
+  {hi}localflow{/hi}  <span class="dim">7 session(s) · 1.9M out · 738.9M cached in · $593</span>
+             <span class="dim">98% of input tokens came from cache</span>
+
+  <span class="ok">running</span> <span class="dim">(2)</span>
+
+    {hi}Build whitespace agent workflow tooling in unchained-labs{/hi}
+      <span class="dim">graph-claude-46 · opus-5 · 660k out · $184 · 99% cached · 38s</span>
+      <span class="dim">~/dev/graph-claude · last: Bash · 23 tool errors</span>
+
+  <span class="wa">waiting on you</span> <span class="dim">(3)</span>
+
+    {hi}create a new repo for socials where we will have private docs …{/hi}
+      <span class="dim">wardn-22 · opus-5 · 839k out · $328 · 97% cached · 2d</span>
+      <span class="dim">~/dev/bench2clanker · claude/bench2baller-mt167r · last: Bash</span></code></pre>
+    <p class="narrow">Nothing is sent anywhere. No daemon, no config, no account — the data is already on your disk and localflow reads it with <code>claude agents --json</code>, which is a supported, TTY-free command, plus the transcripts Claude Code writes anyway.</p>
+  </div>
+</section>
+
+<section id="cost">
+  <div class="wrap">
+    <p class="label">Cost</p>
+    <h2>Two corrections, both invisible unless you go looking</h2>
+    <p class="narrow">The board prices every session from the token counts in its own transcript. Getting that right needed two fixes, and neither would have announced itself.</p>
+    <h3>Usage is re-emitted as a message streams</h3>
+    <p class="narrow">The same <code>usage</code> object appears up to ten times per message, byte identical, once per streamed update. Summing every line inflated output tokens by <strong>2.25x</strong> on a real 17MB transcript, which would have made every figure on the board wrong by that factor. Counting once per message id is exact rather than approximate — every duplicate was identical.</p>
+    <h3>Cache writes are billed by how long they live</h3>
+    <p class="narrow">A 1-hour cache write costs 2x the input rate; a 5-minute one costs 1.25x. Claude Code writes 1-hour entries, so a single 1.25x multiplier under-prices a real session by about a third.</p>
+    <p class="narrow">This is measured, not recalled. <code>claude -p --output-format json</code> reports <code>total_cost_usd</code> for the run it just did, which makes it an oracle: pick multipliers, price the reported tokens, and see whether the arithmetic lands on the number the CLI printed.</p>
+    <pre class="term"><code>  531 input + 22188 cache-read + 3026 cache-write(1h) + 51 output, haiku
+
+  1.25x -&gt; <span class="er">$0.0067873000</span>
+  2.00x -&gt; <span class="ok">$0.0090568000</span>
+  CLI   -&gt; <span class="ok">$0.0090568000</span></code></pre>
+    <div class="note">
+      <p>The test suite re-runs that check against a captured fixture on every commit, so a rate change fails the build instead of quietly changing your bill. Where no price is known for a model the card reads <strong>cost unknown</strong>, never <code>$0.00</code> — the first is a fact and the second is a lie.</p>
+    </div>
+  </div>
+</section>
+
+<section id="graph">
+  <div class="wrap">
+    <p class="label">The graph that ran</p>
+    <h2>Lint the run you already paid for</h2>
+    <p class="narrow"><a href="https://unchained-labs.github.io/graphlint/">graphlint</a> lints the workflow you <em>wrote</em>. That is the easy half: a spec is a statement of intent, and intent is not what your bill is made of.</p>
+    <p class="narrow">Every fan-out Claude Code performs is recorded — which agents were issued together, how wide the group got, which came back with an error. So the graph can be reconstructed afterwards and handed to exactly the same tools.</p>
+    <pre><code>localflow graph f60740f7 &gt; observed.graph.json
+graphlint check observed.graph.json     # lint the run you already paid for
+preflight estimate observed.graph.json  # price the next one like it</code></pre>
+    <p class="narrow">Agent calls sharing an assistant message ran concurrently; calls in separate messages ran one after another. The grouping <em>is</em> the graph. Each observed sequence is emitted as a barrier whose reason begins <code>observed:</code> — a measurement, not an opinion about whether the barrier was needed. That question belongs to graphlint, which now has real graphs to ask it about instead of only the ones people wrote down.</p>
+    <div class="note warn">
+      <p><strong>Shape, not intent.</strong> A transcript records the calls, not the reasoning behind them. localflow can see that a barrier happened; it cannot see whether one was needed, and it does not pretend to. It adds only the observations that need the measured numbers to be sayable at all — three verifiers whose prompts are 100% alike, a fan-out where children failed, a session running at a 12% cache hit rate — and does not duplicate graphlint&#x27;s rule set, because two rule sets eventually disagree.</p>
+    </div>
+    <h3>And the number preflight said it could not measure</h3>
+    <p class="narrow"><a href="https://unchained-labs.github.io/preflight/">preflight</a>&#x27;s <code>calibrate</code> is careful about one refusal: <em>it does not invent a cache hit rate, because usage rows do not report cache reads.</em> True of the rows it had. A Claude Code transcript reports <code>cache_read_input_tokens</code> and a <code>cache_creation</code> object split by TTL, so here it is a measurement — and it is the assumption a cost model is most sensitive to, since cache reads are ~98% of input tokens on a real session and bill at a tenth of the rate.</p>
+    <pre class="term"><code><span class="p">$</span> <span class="c">localflow calibrate &gt; preflight.json</span>
+
+  measured across 11 session(s), 900 model call(s)
+
+  cacheHitRate          <span class="ok">97.9%</span>   <span class="dim">measured, not assumed</span>
+
+  <span class="dim">reported, not written:</span>
+    <span class="dim">input per call       332,433   p10–p90 27,648–1,070,519</span>
+    <span class="dim">output per call        2,413</span></code></pre>
+    <div class="note">
+      <p><strong>Only the rate is written, and the reason is the interesting part.</strong> preflight&#x27;s <code>worker</code> profile means <em>one unit of work</em> and defaults to 8k input. An interactive session measures 332k per call, because by call two hundred the context <em>is</em> the conversation. Both numbers are correct and they are not the same quantity — writing the second into the first would be a fortyfold error wearing the authority of a measurement, which is precisely the failure preflight&#x27;s own refusals exist to prevent.</p>
+    </div>
+    <figure class="demo">
+      <img src="assets/drawer.png" alt="The session detail drawer, showing tool calls and the fan-out graph the session performed" loading="lazy" decoding="async" style="width:100%;height:auto;display:block;border-radius:inherit">
+      <figcaption>The detail drawer: what it spent, what it called, and the fan-out it actually performed.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="actions">
+  <div class="wrap">
+    <p class="label">Orchestrating</p>
+    <h2>Four verbs, and one deliberate absence</h2>
+    <p class="narrow">Off by default. localflow watches; it steers only when you ask it to, with <code>--allow-actions</code>.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>Verb</th>
+          <th>What it runs</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>spawn</strong></td>
+            <td><code>claude --bg -p &lt;prompt&gt;</code> — a background agent, in a directory you allowed</td>
+          </tr>
+          <tr>
+            <td><strong>reprompt</strong></td>
+            <td><code>claude --resume &lt;id&gt; -p &lt;prompt&gt;</code> — another turn on the same session</td>
+          </tr>
+          <tr>
+            <td><strong>reroute</strong></td>
+            <td><code>claude --resume &lt;id&gt; --fork-session --model &lt;m&gt;</code> — the same conversation, a different model. The original is left exactly as it was.</td>
+          </tr>
+          <tr>
+            <td><strong>stop</strong></td>
+            <td><code>SIGINT</code> to the session&#x27;s pid, which is what Ctrl-C sends</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note warn">
+      <p><strong>The fifth verb is missing on purpose.</strong> A board like this obviously wants to inject a prompt into a session that is mid-turn. Each live session has a Unix socket under <code>/run/user/&lt;uid&gt;/cc-socks/</code>, and driving it would mean reverse-engineering an undocumented protocol that can change in any release. So <code>reprompt</code> on a busy session refuses and tells you to fork instead. A tool that steers your agents through a private channel is a tool that silently stops steering them one Tuesday.</p>
+    </div>
+    <p class="narrow">Dragging a card asks for the action that would put it in that lane. Most moves have no such action — you cannot drag a session into <em>running</em>, because what makes a session run is having something to do — and the lane refuses in red and says why, rather than snapping the card back and pretending nothing happened.</p>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <p class="label">Safety</p>
+    <h2>This can start Claude sessions, so it is fussy about who asks</h2>
+    <p class="narrow">A page on the open internet can point your browser at <code>127.0.0.1</code>. Four things stop that page reaching this server, and CI asserts every one of them on each commit.</p>
+    <div class="grid two">
+      <div class="card">
+        <h3>Actions are off</h3>
+        <p>Without <code>--allow-actions</code> every mutating route answers 403. Watching is the default; steering is opted into.</p>
+      </div>
+      <div class="card">
+        <h3>Host is checked</h3>
+        <p>DNS rebinding resolves an attacker&#x27;s hostname to 127.0.0.1, and the give-away is that the browser still sends their name in <code>Host</code>.</p>
+      </div>
+      <div class="card">
+        <h3>Origin is checked</h3>
+        <p>A cross-site POST carries the originating site. A fetch from our own page carries ours; curl sends none. Anything else is refused.</p>
+      </div>
+      <div class="card">
+        <h3>Loopback by default</h3>
+        <p>Binding anywhere else has to be spelled out, and prints a warning saying who can now read your transcripts.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="wrap">
+    <p class="label">Limits</p>
+    <h2>What it does not do</h2>
+    <div class="note warn">
+      <p><strong>It cannot tell you whether a session succeeded.</strong> That is not recorded anywhere it can read, so it does not guess.</p>
+      <p><strong>It reads Claude Code only.</strong> Not Cursor, not Aider, not the API directly. The board is built on <code>claude agents --json</code> and the transcript layout — the first is a supported command, the second is not a published schema. It was derived from a real installation and a future version could move it.</p>
+      <p><strong>Tool errors are not failures.</strong> A <code>tool_result</code> with <code>is_error</code> is routine: a grep that matched nothing, a command that exited 1. The count is shown; no card is marked broken for it.</p>
+      <p><strong>History is capped.</strong> Ten ended sessions by default. A machine with a year of transcripts should not turn the board into an archive.</p>
+    </div>
+  </div>
+</section>
+
+<section id="family">
+  <div class="wrap">
+    <p class="label">The family</p>
+    <h2>Where this sits</h2>
+    <div class="grid three">
+      <a class="card" href="https://unchained-labs.github.io/graphlint/">
+        <h3>graphlint</h3>
+        <p>Lints the graph localflow reconstructs — and every agent workflow spec you write by hand.</p>
+      </a>
+      <a class="card" href="https://unchained-labs.github.io/preflight/">
+        <h3>preflight</h3>
+        <p>Prices the graph before it runs. localflow measures what it cost afterwards, and hands back the cache rate.</p>
+      </a>
+      <a class="card" href="https://github.com/Unchained-Labs/otter">
+        <h3>Otter</h3>
+        <p>Set <code>LOCALFLOW_OTTER_URL</code> and jobs from the Kymatics orchestration engine appear on the same board.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>localflow · Unchained Labs</span>
+    <nav>
+      <a href="https://unchained-labs.github.io/">Org</a>
+      <a href="https://github.com/Unchained-Labs/localflow">Source</a>
+      <a href="https://unchained-labs.github.io/branding/">Brand</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

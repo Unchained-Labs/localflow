@@ -1,0 +1,357 @@
+/* Unchained Labs — shared site stylesheet.
+ *
+ * Source of truth: github.com/Unchained-Labs/branding/site/brand.css
+ * Depends on tokens.css being loaded first (or inlined above it).
+ *
+ * Every Unchained Labs Pages site uses this file unmodified. If a site needs a
+ * component this does not provide, add it here and re-vendor, rather than
+ * forking per repo — the whole point is that seven sites look like one org.
+ */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+body {
+  margin: 0;
+  background: var(--ul-bg);
+  color: var(--ul-body);
+  font-family: var(--ul-font-body);
+  font-size: var(--ul-text-base);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- rhythm ------------------------------------------------------------- */
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 var(--ul-space-6); }
+.narrow { max-width: 720px; }          /* prose measure: 65-75 characters */
+
+section { padding: var(--ul-space-16) 0; }
+section + section { border-top: 1px solid var(--ul-line); }
+
+/* ---- type -------------------------------------------------------------- */
+
+h1, h2, h3, h4 {
+  font-family: var(--ul-font-display);
+  color: var(--ul-heading);
+  letter-spacing: var(--ul-track-display);
+  line-height: 1.15;
+  margin: 0 0 var(--ul-space-4);
+  font-weight: 700;
+}
+
+h1 { font-size: var(--ul-text-3xl); }
+h2 { font-size: var(--ul-text-2xl); margin-top: 0; }
+h3 { font-size: var(--ul-text-xl); font-weight: 600; margin-top: var(--ul-space-8); }
+h4 { font-size: var(--ul-text-lg); font-weight: 600; }
+
+p { margin: 0 0 var(--ul-space-4); }
+p:last-child { margin-bottom: 0; }
+
+.lead { font-size: var(--ul-text-lg); color: var(--ul-body); }
+.muted { color: var(--ul-muted); }
+.faint { color: var(--ul-faint); }
+
+/* The label register: uppercase display, wide tracking. Structure, not argument. */
+.label {
+  font-family: var(--ul-font-display);
+  font-size: var(--ul-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--ul-track-label);
+  color: var(--ul-faint);
+  margin: 0 0 var(--ul-space-3);
+}
+
+a {
+  color: var(--ul-accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--ul-accent) 35%, transparent);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+a:hover { color: var(--ul-accent-dim); border-bottom-color: var(--ul-accent-dim); }
+
+:focus-visible {
+  outline: 2px solid var(--ul-accent);
+  outline-offset: 2px;
+  border-radius: var(--ul-radius-sm);
+}
+
+strong { color: var(--ul-heading); font-weight: 600; }
+
+/* ---- data face --------------------------------------------------------- */
+
+code, kbd, pre, samp, .mono {
+  font-family: var(--ul-font-mono);
+  font-size: 0.9em;
+  font-variant-ligatures: none;
+}
+
+:not(pre) > code {
+  background: var(--ul-bg-inset);
+  border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius-sm);
+  padding: 0.1em 0.35em;
+  color: var(--ul-heading);
+}
+
+pre {
+  background: var(--ul-bg-inset);
+  border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius);
+  padding: var(--ul-space-4);
+  overflow-x: auto;          /* wide content scrolls inside itself, never the page */
+  line-height: 1.55;
+  margin: 0 0 var(--ul-space-4);
+}
+pre code { background: none; border: 0; padding: 0; color: var(--ul-body); }
+
+/* terminal transcript: a dim prompt, a bright command */
+.term .p { color: var(--ul-faint); user-select: none; }
+.term .c { color: var(--ul-heading); }
+.term .ok { color: var(--ul-up); }
+.term .wa { color: var(--ul-warn); }
+.term .er { color: var(--ul-down); }
+.term .ac { color: var(--ul-accent); }
+.term .dim { color: var(--ul-muted); }
+
+/* ---- header ------------------------------------------------------------ */
+
+.site-head {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--ul-bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--ul-line);
+}
+.site-head .wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--ul-space-6);
+  min-height: 60px;
+}
+.site-head .brand { display: flex; align-items: center; gap: var(--ul-space-3); border: 0; }
+.site-head .brand svg, .site-head .brand img { height: 22px; width: auto; display: block; }
+.site-head nav { margin-left: auto; display: flex; gap: var(--ul-space-5, 1.25rem); flex-wrap: wrap; }
+.site-head nav a {
+  border: 0;
+  color: var(--ul-muted);
+  font-size: var(--ul-text-sm);
+}
+.site-head nav a:hover { color: var(--ul-heading); }
+
+/* ---- hero -------------------------------------------------------------- */
+
+.hero { padding: var(--ul-space-16) 0 var(--ul-space-12); }
+.hero h1 { font-size: var(--ul-text-4xl); max-width: 22ch; }
+.hero .lead { max-width: 60ch; }
+@media (max-width: 640px) { .hero h1 { font-size: var(--ul-text-2xl); } }
+
+/* ---- badges / status --------------------------------------------------- */
+
+.badges { display: flex; flex-wrap: wrap; gap: var(--ul-space-2); margin: 0 0 var(--ul-space-6); padding: 0; list-style: none; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-family: var(--ul-font-mono);
+  font-size: var(--ul-text-xs);
+  padding: 0.25em 0.6em;
+  border-radius: var(--ul-radius-pill);
+  border: 1px solid var(--ul-line-strong);
+  color: var(--ul-muted);
+  background: var(--ul-bg-raised);
+}
+.badge.accent { border-color: var(--ul-accent-dim); color: var(--ul-accent); background: var(--ul-accent-wash); }
+
+/* Status carries a glyph via ::before, never colour alone — see brand/palette.md.
+ * This is the accessibility mitigation for the 26deg accent/status hue gap. */
+.badge.up,
+.badge.warn,
+.badge.down { font-weight: 500; }
+.badge.up   { border-color: var(--ul-up);   color: var(--ul-up);   background: var(--ul-up-wash); }
+.badge.warn { border-color: var(--ul-warn); color: var(--ul-warn); background: var(--ul-warn-wash); }
+.badge.down { border-color: var(--ul-down); color: var(--ul-down); background: var(--ul-down-wash); }
+.badge.up::before   { content: "\2713"; }  /* ✓ */
+.badge.warn::before { content: "!"; }
+.badge.down::before { content: "\2717"; }  /* ✗ */
+
+/* ---- buttons ----------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  font-family: var(--ul-font-display);
+  font-size: var(--ul-text-sm);
+  font-weight: 600;
+  padding: 0.6em 1.1em;
+  border-radius: var(--ul-radius);
+  border: 1px solid var(--ul-line-strong);
+  color: var(--ul-heading);
+  background: var(--ul-bg-raised);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.btn:hover { border-color: var(--ul-accent-dim); color: var(--ul-heading); }
+.btn.primary {
+  background: var(--ul-accent);
+  border-color: var(--ul-accent);
+  color: var(--ul-on-accent);
+}
+.btn.primary:hover { background: var(--ul-accent-dim); border-color: var(--ul-accent-dim); color: var(--ul-on-accent); }
+.btn-row { display: flex; flex-wrap: wrap; gap: var(--ul-space-3); margin-top: var(--ul-space-6); }
+
+/* ---- cards / grid ------------------------------------------------------ */
+
+.grid { display: grid; gap: var(--ul-space-4); }
+.grid.two   { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.grid.three { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+.card {
+  background: var(--ul-bg-raised);
+  border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius-lg);
+  padding: var(--ul-space-6);
+}
+a.card { border-bottom: 1px solid var(--ul-line); color: inherit; display: block; }
+a.card:hover { border-color: var(--ul-accent-dim); }
+.card h3 { margin: 0 0 var(--ul-space-2); font-size: var(--ul-text-lg); }
+.card h3 code { font-size: 1em; background: none; border: 0; padding: 0; color: var(--ul-accent); }
+.card p { color: var(--ul-body); font-size: var(--ul-text-sm); margin-bottom: 0; }
+
+/* a stat tile: big mono figure, small label */
+.stat .fig {
+  font-family: var(--ul-font-mono);
+  font-size: var(--ul-text-2xl);
+  color: var(--ul-heading);
+  line-height: 1.1;
+  display: block;
+}
+.stat .fig.accent { color: var(--ul-accent); }
+
+/* ---- tables ------------------------------------------------------------ */
+
+.table-scroll { overflow-x: auto; margin: 0 0 var(--ul-space-4); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ul-text-sm);
+}
+th {
+  font-family: var(--ul-font-display);
+  font-size: var(--ul-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--ul-track-label);
+  color: var(--ul-faint);
+  text-align: left;
+  padding: var(--ul-space-2) var(--ul-space-3);
+  border-bottom: 1px solid var(--ul-line-strong);
+  white-space: nowrap;
+}
+td {
+  padding: var(--ul-space-3);
+  border-bottom: 1px solid var(--ul-line);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--ul-font-mono); text-align: right; white-space: nowrap; }
+
+/* ---- callout ----------------------------------------------------------- */
+
+.note {
+  border-left: 2px solid var(--ul-accent);
+  background: var(--ul-accent-wash);
+  padding: var(--ul-space-4) var(--ul-space-6);
+  border-radius: 0 var(--ul-radius) var(--ul-radius) 0;
+  margin: 0 0 var(--ul-space-6);
+}
+.note.warn { border-left-color: var(--ul-warn); background: var(--ul-warn-wash); }
+.note.down { border-left-color: var(--ul-down); background: var(--ul-down-wash); }
+.note p:last-child { margin-bottom: 0; }
+
+/* ---- lists ------------------------------------------------------------- */
+
+ul.clean { list-style: none; padding: 0; margin: 0 0 var(--ul-space-4); }
+ul.clean li { padding-left: 1.4em; position: relative; margin-bottom: var(--ul-space-2); }
+ul.clean li::before {
+  content: "";
+  position: absolute;
+  left: 0.25em;
+  top: 0.7em;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--ul-accent);
+}
+
+/* ---- footer ------------------------------------------------------------ */
+
+.site-foot {
+  border-top: 1px solid var(--ul-line);
+  padding: var(--ul-space-8) 0;
+  color: var(--ul-faint);
+  font-size: var(--ul-text-sm);
+}
+.site-foot .wrap { display: flex; flex-wrap: wrap; gap: var(--ul-space-4); align-items: center; }
+.site-foot nav { margin-left: auto; display: flex; gap: var(--ul-space-4); flex-wrap: wrap; }
+.site-foot a { color: var(--ul-muted); border: 0; }
+.site-foot a:hover { color: var(--ul-accent); }
+
+/* ---- media ------------------------------------------------------------- */
+
+img, svg { max-width: 100%; }
+figure { margin: 0 0 var(--ul-space-6); }
+figcaption { color: var(--ul-faint); font-size: var(--ul-text-xs); margin-top: var(--ul-space-2); }
+
+hr { border: 0; border-top: 1px solid var(--ul-line); margin: var(--ul-space-8) 0; }
+
+/* ---- terminal demo player ---------------------------------------------- */
+
+/* A muted autoplaying loop reads as a moving screenshot. No controls, no audio,
+ * and `playsinline` so iOS does not hijack it into fullscreen. */
+.demo {
+  margin: 0 0 var(--ul-space-6);
+  border-radius: var(--ul-radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--ul-line);
+  background: var(--ul-bg-inset);
+  line-height: 0;                    /* kill the inline-video baseline gap */
+}
+.demo video {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.demo figcaption {
+  line-height: 1.5;
+  padding: var(--ul-space-3) var(--ul-space-4);
+  border-top: 1px solid var(--ul-line);
+  background: var(--ul-bg-raised);
+  color: var(--ul-faint);
+  font-size: var(--ul-text-xs);
+}
+
+/* In the hero the demo is the primary object, so give it more room and a
+ * slightly stronger edge than an inline one. */
+.hero-demo {
+  margin-top: var(--ul-space-8);
+  border-color: var(--ul-line-strong);
+  max-width: 900px;
+}
+
+/* Respect a reduced-motion preference: pause the loop and show the first frame.
+ * An autoplaying loop is exactly what that setting exists to stop. */
+@media (prefers-reduced-motion: reduce) {
+  .demo video { animation-play-state: paused; }
+}

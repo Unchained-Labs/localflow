@@ -1,0 +1,131 @@
+/* Unchained Labs — design tokens.
+ *
+ * Source of truth: github.com/Unchained-Labs/branding
+ * If an app's colours drift from this file, this file wins.
+ *
+ * Never hard-code a hex in an app repo. Style through these custom properties
+ * so a palette change is a one-file swap rather than a grep-and-pray.
+ *
+ * Dark is the native ground: every product here is a terminal-adjacent
+ * developer tool. The light block exists so docs and embeds don't burn
+ * retinas in a bright room — it is a supported mode, not the default.
+ */
+
+:root {
+  /* ---- surface ---------------------------------------------------------- */
+  --ul-bg:            #0F1419;  /* Midnight Navy — the ground */
+  --ul-bg-raised:     #171D26;  /* cards, panels, code blocks */
+  --ul-bg-inset:      #0B0F13;  /* wells, active terminal rows */
+  --ul-line:          #232B35;  /* hairlines. 1.29:1 — decorative, never text */
+  --ul-line-strong:   #313B47;  /* borders that must survive a busy background */
+
+  /* ---- ink (contrast measured against --ul-bg) -------------------------- */
+  --ul-heading:       #E8EDF2;  /* 15.71:1 */
+  --ul-body:          #A8B3BF;  /*  8.70:1 */
+  --ul-muted:         #7C8896;  /*  5.13:1 */
+  --ul-faint:         #5A6673;  /*  3.16:1 — LARGE TEXT / UI ONLY, fails AA body */
+
+  /* ---- accent ---------------------------------------------------------- */
+  --ul-accent:        #00D4AA;  /* Chain Teal — 9.69:1 on bg */
+  --ul-accent-dim:    #00A888;  /* 6.13:1 — hover, focus rings, active borders */
+  --ul-accent-wash:   #00D4AA1F; /* 12% — selected rows, subtle fills */
+  --ul-on-accent:     #0F1419;  /* text ON an accent fill — 9.69:1 */
+
+  /* ---- status: a SEPARATE axis, never decorative ----------------------- */
+  /* These answer "did it pass?". They never share a colour with the brand,
+   * and they are never the only signal — see brand/palette.md. */
+  --ul-up:            #4ADE80;  /* 10.62:1 */
+  --ul-warn:          #E8B339;  /*  9.64:1 */
+  --ul-down:          #E5484D;  /*  4.73:1 */
+  --ul-up-wash:       #4ADE801F;
+  --ul-warn-wash:     #E8B3391F;
+  --ul-down-wash:     #E5484D1F;
+
+  /* ---- type ------------------------------------------------------------ */
+  --ul-font-display:  "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --ul-font-body:     "Inter", ui-sans-serif, system-ui, sans-serif;
+  --ul-font-mono:     "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ul-track-label:   0.08em;   /* uppercase labels only */
+  --ul-track-display: -0.02em;  /* display sizes tighten */
+
+  /* ---- scale (1.25 ratio, 16px base) ----------------------------------- */
+  --ul-text-xs:   0.75rem;
+  --ul-text-sm:   0.875rem;
+  --ul-text-base: 1rem;
+  --ul-text-lg:   1.25rem;
+  --ul-text-xl:   1.5rem;
+  --ul-text-2xl:  1.953rem;
+  --ul-text-3xl:  2.441rem;
+  --ul-text-4xl:  3.052rem;
+
+  /* ---- space (4px base) ------------------------------------------------- */
+  --ul-space-1: 0.25rem;
+  --ul-space-2: 0.5rem;
+  --ul-space-3: 0.75rem;
+  --ul-space-4: 1rem;
+  --ul-space-6: 1.5rem;
+  --ul-space-8: 2rem;
+  --ul-space-12: 3rem;
+  --ul-space-16: 4rem;
+
+  /* ---- geometry --------------------------------------------------------- */
+  --ul-radius-sm: 3px;
+  --ul-radius:    6px;
+  --ul-radius-lg: 10px;
+  --ul-radius-pill: 999px;
+
+  /* Shadows are near-useless on a near-black ground. Elevation is expressed
+   * with --ul-bg-raised plus a hairline, not with a glow. */
+  --ul-ring: 0 0 0 2px var(--ul-accent-dim);
+}
+
+/* Light mode. Ratios are re-measured against #FFFFFF, not inherited —
+ * a token ramp inverted by eye is how a "supported" light mode ships broken. */
+:root[data-theme="light"] {
+  --ul-bg:          #FFFFFF;
+  --ul-bg-raised:   #F5F7F9;
+  --ul-bg-inset:    #ECEFF3;
+  --ul-line:        #E2E7EC;
+  --ul-line-strong: #C9D1DA;
+
+  --ul-heading:     #0F1419;  /* 18.51:1 */
+  --ul-body:        #3E4A57;  /*  9.04:1 */
+  --ul-muted:       #5D6B7A;  /*  5.46:1 */
+  --ul-faint:       #7B8896;  /*  3.62:1 — large text / UI only, fails AA body */
+
+  /* Chain Teal on white is 1.91:1 — unreadable as text. Light mode keeps the
+   * brand hue but drops luminance far enough to be legible. This is the one
+   * place the accent is allowed to differ between modes, and the reason is
+   * arithmetic, not taste. */
+  --ul-accent:      #007D66;  /*  5.09:1 */
+  --ul-accent-dim:  #00604E;  /*  7.55:1 */
+  --ul-accent-wash: #00D4AA24;
+  --ul-on-accent:   #FFFFFF;  /*  5.09:1 on --ul-accent */
+
+  --ul-up:          #12783F;  /*  5.55:1 */
+  --ul-warn:        #8A5B00;  /*  5.87:1 */
+  --ul-down:        #C0272C;  /*  5.89:1 */
+}
+
+/* Respect the OS when the app has not made an explicit choice. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ul-bg:          #FFFFFF;
+    --ul-bg-raised:   #F5F7F9;
+    --ul-bg-inset:    #ECEFF3;
+    --ul-line:        #E2E7EC;
+    --ul-line-strong: #C9D1DA;
+    --ul-heading:     #0F1419;
+    --ul-body:        #3E4A57;
+    --ul-muted:       #5D6B7A;
+    --ul-faint:       #7B8896;
+    --ul-accent:      #007D66;
+    --ul-accent-dim:  #00604E;
+    --ul-accent-wash: #00D4AA24;
+    --ul-on-accent:   #FFFFFF;
+    --ul-up:          #12783F;
+    --ul-warn:        #8A5B00;
+    --ul-down:        #C0272C;
+  }
+}
