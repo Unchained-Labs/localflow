@@ -1,0 +1,211 @@
+/* localflow — the board.
+   Every colour is a token from the vendored Unchained Labs palette. Nothing here
+   invents a hex, because a dashboard that drifts from the brand it claims is a
+   dashboard nobody trusts about anything else either. */
+
+* { box-sizing: border-box; }
+
+/* An explicit `display` beats the user-agent rule for [hidden], so every element
+   this app hides by attribute needs this or it stays on screen. The drawer is
+   `display: flex`, which is exactly how it ended up covering a whole lane. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--ul-bg);
+  color: var(--ul-body);
+  font-family: var(--ul-font-body, Inter, system-ui, sans-serif);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body { display: flex; flex-direction: column; }
+
+/* ---- top bar ------------------------------------------------------------ */
+.top {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--ul-line);
+  background: var(--ul-bg-raised);
+  flex: none;
+}
+.brand { display: flex; align-items: center; text-decoration: none; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; }
+
+.totals { display: flex; gap: 1.4rem; flex-wrap: wrap; font-family: var(--ul-font-mono, ui-monospace, monospace); }
+.totals .t { display: flex; flex-direction: column; gap: 2px; }
+.totals .t b { color: var(--ul-heading); font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.totals .t span { color: var(--ul-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.pill {
+  font-family: var(--ul-font-mono, monospace);
+  font-size: 11px;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--ul-line);
+  color: var(--ul-muted);
+  white-space: nowrap;
+}
+.pill.armed { color: var(--ul-warn); border-color: color-mix(in srgb, var(--ul-warn) 45%, transparent); }
+.pill.live { display: inline-flex; align-items: center; gap: 0.4rem; }
+.pill.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ul-faint); }
+.pill.live.on i { background: var(--ul-up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ul-up) 22%, transparent); }
+.pill.live.off i { background: var(--ul-down); }
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 0.42rem 0.85rem;
+  border-radius: var(--ul-radius-md, 8px);
+  border: 1px solid var(--ul-line);
+  background: transparent;
+  color: var(--ul-body);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--ul-accent); color: var(--ul-heading); }
+.btn.primary { background: var(--ul-accent); border-color: var(--ul-accent); color: var(--ul-bg); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger:hover { border-color: var(--ul-down); color: var(--ul-down); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.icon { background: none; border: 0; color: var(--ul-muted); font-size: 16px; cursor: pointer; padding: 0.2rem 0.4rem; }
+.icon:hover { color: var(--ul-heading); }
+
+/* ---- board -------------------------------------------------------------- */
+.board {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(230px, 1fr));
+  gap: 1px;
+  background: var(--ul-line);
+  overflow: hidden;
+  min-height: 0;
+}
+@media (max-width: 980px) { .board { grid-template-columns: repeat(2, minmax(230px, 1fr)); overflow: auto; } }
+@media (max-width: 560px) { .board { grid-template-columns: 1fr; } }
+
+.lane { background: var(--ul-bg); display: flex; flex-direction: column; min-height: 0; }
+.lane-head {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.7rem 0.9rem 0.55rem;
+  border-bottom: 1px solid var(--ul-line);
+  font-family: var(--ul-font-mono, monospace);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--ul-muted);
+  position: sticky; top: 0; background: var(--ul-bg); z-index: 1;
+}
+.lane-head .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ul-faint); flex: none; }
+.lane-running  .dot { background: var(--ul-up); }
+.lane-queued   .dot { background: var(--ul-accent); }
+.lane-waiting  .dot { background: var(--ul-warn); }
+.lane-head .n { margin-left: auto; color: var(--ul-faint); }
+.lane-body { overflow-y: auto; padding: 0.65rem; display: flex; flex-direction: column; gap: 0.65rem; min-height: 0; }
+.lane.drop-target { outline: 2px dashed var(--ul-accent); outline-offset: -6px; }
+.lane.drop-refuse { outline: 2px dashed var(--ul-down); outline-offset: -6px; }
+
+.empty { color: var(--ul-faint); font-size: 12.5px; padding: 0.9rem 0.3rem; line-height: 1.5; }
+
+/* ---- card --------------------------------------------------------------- */
+.card {
+  background: var(--ul-bg-raised);
+  border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius-md, 8px);
+  padding: 0.7rem 0.75rem;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 0.45rem;
+}
+.card:hover { border-color: color-mix(in srgb, var(--ul-accent) 55%, var(--ul-line)); }
+.card:focus-visible { outline: 2px solid var(--ul-accent); outline-offset: 2px; }
+.card.dragging { opacity: 0.45; }
+.card.otter { border-left: 2px solid var(--ul-accent); }
+
+.card h3 {
+  margin: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35;
+  color: var(--ul-heading);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.meta { display: flex; flex-wrap: wrap; gap: 0.3rem 0.55rem; font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-muted); }
+.meta .cost { color: var(--ul-heading); }
+.meta .unknown { color: var(--ul-faint); font-style: italic; }
+.sub { font-family: var(--ul-font-mono, monospace); font-size: 10.5px; color: var(--ul-faint); word-break: break-all; line-height: 1.5; }
+.sub .err, .sub .queued { white-space: nowrap; }
+/* Amber, not red. A tool_result with is_error is routine — a grep that matched
+   nothing, a command that exited 1 — and painting it red made a healthy board
+   look like a wall of failures. Red is reserved for something that actually
+   failed. */
+.sub .err { color: var(--ul-warn); }
+.sub .queued { color: var(--ul-accent); }
+
+.bar { height: 3px; border-radius: 2px; background: var(--ul-bg-inset, #0B0F13); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ul-accent); }
+
+/* ---- drawer ------------------------------------------------------------- */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 20; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%);
+  background: var(--ul-bg-raised); border-left: 1px solid var(--ul-line);
+  z-index: 21; display: flex; flex-direction: column;
+}
+.drawer-head { display: flex; align-items: flex-start; gap: 1rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--ul-line); }
+.drawer-head h2 { margin: 0; font-size: 16px; color: var(--ul-heading); line-height: 1.35; }
+.drawer-body { overflow-y: auto; padding: 1.1rem; display: flex; flex-direction: column; gap: 1.3rem; }
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; font-family: var(--ul-font-mono, monospace); font-size: 12px; }
+.kv dt { color: var(--ul-faint); }
+.kv dd { margin: 0; color: var(--ul-body); word-break: break-all; }
+
+.sec h4 { margin: 0 0 0.6rem; font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); font-weight: 600; }
+.prompt { background: var(--ul-bg-inset, #0B0F13); border: 1px solid var(--ul-line); border-radius: 6px; padding: 0.7rem; font-family: var(--ul-font-mono, monospace); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; color: var(--ul-body); }
+
+.tools { display: flex; flex-direction: column; gap: 0.3rem; }
+.tool { display: grid; grid-template-columns: 8.5rem 1fr 2.5rem; align-items: center; gap: 0.6rem; font-family: var(--ul-font-mono, monospace); font-size: 11.5px; }
+.tool span:first-child { color: var(--ul-body); overflow: hidden; text-overflow: ellipsis; }
+.tool .n { text-align: right; color: var(--ul-faint); }
+
+.note { border-left: 2px solid var(--ul-line); padding: 0.45rem 0 0.45rem 0.7rem; font-size: 12.5px; line-height: 1.55; color: var(--ul-body); }
+.note.warn { border-color: var(--ul-warn); }
+.note b { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-warn); display: block; margin-bottom: 2px; }
+.note.info b { color: var(--ul-muted); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.hint { font-size: 12px; color: var(--ul-faint); line-height: 1.55; }
+
+svg.graph { width: 100%; height: auto; background: var(--ul-bg-inset, #0B0F13); border: 1px solid var(--ul-line); border-radius: 6px; }
+svg.graph text { font-family: var(--ul-font-mono, monospace); font-size: 5px; fill: var(--ul-body); }
+svg.graph text.small { font-size: 3.6px; fill: var(--ul-faint); }
+
+/* ---- dialog ------------------------------------------------------------- */
+dialog {
+  background: var(--ul-bg-raised); color: var(--ul-body);
+  border: 1px solid var(--ul-line); border-radius: var(--ul-radius-lg, 12px);
+  padding: 1.2rem; width: min(520px, 92vw);
+}
+dialog::backdrop { background: rgba(0,0,0,0.55); }
+dialog h3 { margin: 0 0 0.3rem; color: var(--ul-heading); font-size: 15px; }
+.dlg-sub { margin: 0 0 1rem; color: var(--ul-faint); font-size: 12.5px; line-height: 1.5; }
+dialog label { display: block; margin-bottom: 0.8rem; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ul-faint); }
+dialog textarea, dialog input, dialog select {
+  display: block; width: 100%; margin-top: 0.35rem;
+  background: var(--ul-bg-inset, #0B0F13); color: var(--ul-body);
+  border: 1px solid var(--ul-line); border-radius: 6px; padding: 0.5rem 0.6rem;
+  font-family: var(--ul-font-mono, monospace); font-size: 12.5px; text-transform: none; letter-spacing: 0;
+}
+dialog textarea { resize: vertical; }
+dialog .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.4rem; }
+.dlg-err { color: var(--ul-down); font-size: 12.5px; margin: 0 0 0.6rem; }
+
+/* ---- misc --------------------------------------------------------------- */
+.degraded { margin: 0; padding: 0.6rem 1.25rem; background: color-mix(in srgb, var(--ul-warn) 12%, var(--ul-bg)); border-top: 1px solid var(--ul-line); color: var(--ul-warn); font-size: 12px; flex: none; }
+.foot { display: flex; gap: 1rem; flex-wrap: wrap; padding: 0.55rem 1.25rem; border-top: 1px solid var(--ul-line); color: var(--ul-faint); font-size: 11px; flex: none; }
+.foot span:last-child { margin-left: auto; }
+
+.toasts { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; flex-direction: column; gap: 0.5rem; align-items: center; }
+.toast { background: var(--ul-bg-raised); border: 1px solid var(--ul-line); border-left-width: 3px; border-radius: 8px; padding: 0.6rem 0.9rem; font-size: 12.5px; max-width: 60ch; line-height: 1.5; color: var(--ul-body); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.toast.ok { border-left-color: var(--ul-up); }
+.toast.err { border-left-color: var(--ul-down); }
+.toast.info { border-left-color: var(--ul-accent); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

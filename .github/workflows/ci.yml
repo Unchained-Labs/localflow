@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+
+  behaviour:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # localflow prices what Claude Code actually spent. If the arithmetic
+      # drifts from the CLI's own reported figure, every number on the board is
+      # wrong and nothing else in this job matters.
+      - name: cost still reproduces the CLI's own total_cost_usd
+        run: |
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            const { costOf, normaliseModel } = await import('./dist/src/pricing.js');
+            const f = JSON.parse(readFileSync('test/fixtures/headless-result.json','utf8'));
+            const [model, mu] = Object.entries(f.modelUsage)[0];
+            const cc = f.usage.cache_creation ?? {};
+            const ours = costOf({
+              input: mu.inputTokens, output: mu.outputTokens,
+              cacheRead: mu.cacheReadInputTokens,
+              cacheWrite5m: cc.ephemeral_5m_input_tokens ?? 0,
+              cacheWrite1h: cc.ephemeral_1h_input_tokens ?? mu.cacheCreationInputTokens,
+            }, normaliseModel(model));
+            if (Math.abs(ours - f.total_cost_usd) > 1e-9)
+              throw new Error('cost drifted: ours ' + ours + ' vs CLI ' + f.total_cost_usd);
+            console.log('ok  cost matches the CLI to 1e-9:', ours);
+          "
+
+      # A missing session must never render as an empty board, and a board that
+      # could not ask must never render as a board with nothing on it.
+      - name: an unreachable registry is an error, not an empty board
+        run: |
+          set +e
+          out=$(LOCALFLOW_CLAUDE_BIN=/nonexistent/claude node dist/src/cli.js board 2>&1)
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then echo "::error::board exited 0 with no registry"; exit 1; fi
+          echo "$out" | grep -q "could not read the session registry" || {
+            echo "::error::did not explain why the board is empty"; echo "$out"; exit 1; }
+          echo "ok  an unreachable registry fails loudly"
+
+      - name: the graph a session ran is a spec graphlint and preflight accept
+        run: |
+          # The claim this repo makes about the rest of the family. The emitted
+          # document has to be a real spec, not a lookalike.
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            const { advance, emptyState } = await import('./dist/src/transcript.js');
+            const { toTask } = await import('./dist/src/claude.js');
+            const { observedSpec } = await import('./dist/src/graph.js');
+            const s = emptyState('fixture-0001');
+            advance('test/fixtures/transcript.jsonl', s);
+            const spec = observedSpec(toTask('fixture-0001', undefined, s, undefined));
+            if (!Array.isArray(spec.nodes) || !spec.nodes.length) throw new Error('no nodes');
+            if (!Array.isArray(spec.edges)) throw new Error('no edges');
+            for (const e of spec.edges) {
+              if (e.barrier && !e.barrierReason) throw new Error('barrier with no reason: ' + e.from + '->' + e.to);
+            }
+            const verify = spec.nodes.find(n => n.harness);
+            if (!verify) throw new Error('the verifier panel in the fixture was not recognised');
+            if (new Set(verify.harness.lenses).size !== 1)
+              throw new Error('three identical prompts should collapse to one distinct lens');
+            if (!spec.observed?.sessionId) throw new Error('spec carries no provenance');
+            console.log('ok  observed spec is well-formed:', spec.nodes.length, 'nodes,', spec.edges.length, 'edges');
+          "
+
+      # Self-consistency across the family: one price list, not two that agree
+      # by coincidence until one of them is edited.
+      - name: the price table matches preflight's exported one
+        run: |
+          node --input-type=module -e "
+            const { toOtterEnv, PRICING_VERIFIED, pricingAgeDays } = await import('./dist/src/pricing.js');
+            const mine = toOtterEnv();
+            // Kept in step with Unchained-Labs/preflight. If preflight moves a
+            // price, this string changes and this step fails until localflow
+            // follows.
+            const expected = 'claude-fable-5=10:50,claude-mythos-5=10:50,claude-opus-5=5:25,claude-opus-4-8=5:25,claude-opus-4-7=5:25,claude-opus-4-6=5:25,claude-sonnet-5=2:10,claude-sonnet-4-6=3:15,claude-haiku-4-5=1:5';
+            if (mine !== expected) throw new Error('price table drifted from preflight:\\n  ' + mine + '\\n  ' + expected);
+            const age = pricingAgeDays(new Date().toISOString().slice(0,10));
+            if (age > 180) throw new Error('pricing verified ' + age + ' days ago (' + PRICING_VERIFIED + ') — re-verify it');
+            console.log('ok  price table matches preflight, verified', age, 'days ago');
+          "
+
+      - name: the server refuses what it should refuse
+        run: |
+          node dist/src/cli.js --port 7399 > /tmp/lf.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf -m 1 http://127.0.0.1:7399/api/health >/dev/null && break; sleep 1; done
+
+          curl -sf http://127.0.0.1:7399/api/health >/dev/null || { echo "::error::server never came up"; cat /tmp/lf.log; exit 1; }
+
+          # Actions are off unless asked for.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:7399/api/actions/spawn \
+                   -H 'content-type: application/json' -d '{"prompt":"x","cwd":"/tmp"}')
+          [ "$code" = "403" ] || { echo "::error::spawn was not refused in read-only mode (got $code)"; exit 1; }
+
+          # A page on another origin must not be able to drive this.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:7399/api/actions/spawn \
+                   -H 'Origin: https://evil.example' -H 'content-type: application/json' -d '{}')
+          [ "$code" = "403" ] || { echo "::error::cross-origin POST was not refused (got $code)"; exit 1; }
+
+          # DNS rebinding: right address, attacker's name in Host.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' http://127.0.0.1:7399/api/board)
+          [ "$code" = "403" ] || { echo "::error::foreign Host header was not refused (got $code)"; exit 1; }
+
+          # Static serving must not escape the web root.
+          code=$(curl -s -o /dev/null -w '%{http_code}' --path-as-is http://127.0.0.1:7399/../../../../etc/passwd)
+          [ "$code" = "403" ] || [ "$code" = "404" ] || { echo "::error::path traversal was not refused (got $code)"; exit 1; }
+
+          echo "ok  read-only by default, cross-origin refused, Host checked, traversal blocked"
+          kill %1 2>/dev/null || true
+
+  pages:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deploy
+        uses: actions/deploy-pages@v4

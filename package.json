@@ -1,0 +1,30 @@
+{
+  "name": "localflow",
+  "version": "0.1.0",
+  "description": "A Kanban board and orchestrator for the Claude Code sessions running on your own machine. Reads the live session registry, prices every run from real token counts, and lints the fan-out that actually happened.",
+  "keywords": ["claude", "claude-code", "agent", "orchestration", "kanban", "dashboard", "local"],
+  "license": "MIT",
+  "author": "Erwin Lejeune",
+  "repository": { "type": "git", "url": "git+https://github.com/Unchained-Labs/localflow.git" },
+  "homepage": "https://unchained-labs.github.io/localflow/",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "localflow": "./dist/src/cli.js" },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && pnpm run build:web",
+    "build:web": "esbuild web/app.ts --bundle --format=esm --target=es2022 --outfile=dist/web/app.js --log-level=warning && node tools/copy-web.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.2"
+  },
+  "packageManager": "pnpm@9.12.0"
+}

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>localflow</title>
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="/" aria-label="localflow">
+    <img src="/lockup-horizontal.svg" alt="localflow" height="22">
+  </a>
+
+  <div class="totals" id="totals" aria-live="polite"></div>
+
+  <div class="top-right">
+    <span class="pill" id="mode" title="Actions are off unless localflow was started with --allow-actions">read-only</span>
+    <span class="pill live" id="live"><i></i>connecting</span>
+    <button class="btn primary" id="new-task" hidden>New task</button>
+  </div>
+</header>
+
+<main id="board" class="board" aria-label="Claude Code sessions on this machine"></main>
+
+<p class="degraded" id="degraded" hidden></p>
+
+<footer class="foot">
+  <span>Cost is derived from measured tokens, not reported by the provider.</span>
+  <span id="pricing-note"></span>
+</footer>
+
+<!-- Detail drawer -->
+<aside class="drawer" id="drawer" hidden aria-label="Session detail">
+  <div class="drawer-head">
+    <h2 id="d-title">—</h2>
+    <button class="icon" id="d-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="d-body"></div>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<!-- New task / reprompt / reroute -->
+<dialog id="dlg">
+  <form method="dialog" id="dlg-form">
+    <h3 id="dlg-title">New task</h3>
+    <p class="dlg-sub" id="dlg-sub"></p>
+    <label>Prompt<textarea id="f-prompt" rows="5" placeholder="What should it do?"></textarea></label>
+    <label id="l-cwd">Working directory<input id="f-cwd" type="text" spellcheck="false"></label>
+    <div class="row">
+      <label>Model
+        <select id="f-model">
+          <option value="">default</option>
+          <option value="haiku">haiku</option>
+          <option value="sonnet">sonnet</option>
+          <option value="opus">opus</option>
+          <option value="fable">fable</option>
+        </select>
+      </label>
+      <label>Effort
+        <select id="f-effort">
+          <option value="">default</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </label>
+    </div>
+    <p class="dlg-err" id="dlg-err" hidden></p>
+    <div class="dlg-actions">
+      <button value="cancel" class="btn">Cancel</button>
+      <button value="go" class="btn primary" id="dlg-go">Start</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# scratch output from running the CI assertions locally
+s.json
+board.json
+graph.json

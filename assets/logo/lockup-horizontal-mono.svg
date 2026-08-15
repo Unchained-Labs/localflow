@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="localflow">
+  <g><rect x="4.50" y="5.50" width="6.00" height="21.00" rx="3.00" fill="currentColor"/>
+  <rect x="13.00" y="5.50" width="6.00" height="14.49" rx="3.00" fill="currentColor"/>
+  <rect x="21.50" y="5.50" width="6.00" height="10.00" rx="3.00" fill="currentColor"/></g>
+  <text x="37.0" y="21.6" fill="currentColor" font-family="Space Grotesk, Inter, Helvetica Neue, Arial, sans-serif" font-size="17" font-weight="600" letter-spacing="-0.4">localflow</text>
+</svg>
