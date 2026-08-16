@@ -9,7 +9,8 @@
 </div>
 
 <div align="center">
-  <img src="docs/assets/board.png" width="880" alt="The localflow board: four lanes of live Claude Code sessions with tokens, cost and cache share">
+  <img src="docs/assets/demo.gif" width="880" alt="The localflow dashboard: four lanes of live Claude Code sessions, the detail drawer, the observed fan-out graph, and the reroute and spawn dialogs">
+  <br><sub>The real dashboard, against a real machine. <a href="https://unchained-labs.github.io/localflow/">Full demo →</a></sub>
 </div>
 
 ---
