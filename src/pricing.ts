@@ -21,7 +21,29 @@ export interface ModelPrice {
   introUntil?: string;
   standardInput?: number;
   standardOutput?: number;
+  /** Who charges it. Only set on entries that did not come from the table below. */
+  provider?: string;
 }
+
+/**
+ * Where a price came from, which is as important as the price.
+ *
+ * `builtin` is verified in CI. `external` is a number the operator typed into
+ * ~/.localflow/pricing.json and is exactly as current as they made it. `local`
+ * is a real zero — hardware you own, no per-token bill — and is deliberately
+ * distinguishable from `none`, which is "we do not know", the state that must
+ * never render as a dollar figure.
+ */
+export type PriceOrigin = "builtin" | "external" | "local" | "none";
+
+export interface PricedModel {
+  price: ModelPrice | null;
+  origin: PriceOrigin;
+  /** For `local`, why the zero is a fact. Empty otherwise. */
+  note?: string;
+}
+
+import { LOCAL_PRICE, LOCAL_REASON, isLocalModel, loadExternalPricing } from "./providers.js";
 
 export const PRICING_VERIFIED = "2026-06-24";
 
@@ -67,15 +89,56 @@ export const CACHE_READ_MULTIPLIER = 0.1;
 export const CACHE_WRITE_5M_MULTIPLIER = 1.25;
 export const CACHE_WRITE_1H_MULTIPLIER = 2.0;
 
-/** Resolve a model id to a price, or null when we have no basis for one. */
-export function priceOf(model: string | undefined | null, asOf?: string): ModelPrice | null {
-  if (!model) return null;
-  const p = PRICING[model];
-  if (!p) return null;
+/** Apply an intro rate's expiry, if it has one. */
+function atDate(p: ModelPrice, asOf?: string): ModelPrice {
   if (p.introUntil && asOf && asOf > p.introUntil) {
     return { ...p, input: p.standardInput ?? p.input, output: p.standardOutput ?? p.output };
   }
   return p;
+}
+
+/**
+ * External prices are read once per process.
+ *
+ * Re-reading per card would make a 40-card board do 40 stat() calls a poll for
+ * a file that changes about twice a year. `reloadPricing()` exists for the
+ * operator who just edited it and does not want to restart.
+ */
+let external = loadExternalPricing();
+
+export function reloadPricing(): void {
+  external = loadExternalPricing();
+}
+
+/** What the current external table knows, and whether it could be read at all. */
+export function externalPricing() {
+  return external;
+}
+
+/**
+ * Resolve a model id to a price *and to where that price came from*.
+ *
+ * Order matters and is deliberate: the built-in table wins, because it is the
+ * one CI verifies. An operator can add models it does not cover; they cannot
+ * silently override a rate the build is asserting.
+ */
+export function resolvePrice(model: string | undefined | null, asOf?: string): PricedModel {
+  if (!model) return { price: null, origin: "none" };
+
+  const builtin = PRICING[model] ?? PRICING[model.replace(/-\d{8}$/, "")];
+  if (builtin) return { price: atDate(builtin, asOf), origin: "builtin" };
+
+  const supplied = external.models[model];
+  if (supplied) return { price: atDate(supplied, asOf), origin: "external" };
+
+  if (isLocalModel(model)) return { price: LOCAL_PRICE, origin: "local", note: LOCAL_REASON };
+
+  return { price: null, origin: "none" };
+}
+
+/** Resolve a model id to a price, or null when we have no basis for one. */
+export function priceOf(model: string | undefined | null, asOf?: string): ModelPrice | null {
+  return resolvePrice(model, asOf).price;
 }
 
 export interface CostableUsage {
@@ -107,7 +170,11 @@ export function normaliseModel(model: string | undefined | null): string | undef
   if (!model) return undefined;
   if (PRICING[model]) return model;
   const undated = model.replace(/-\d{8}$/, "");
-  return PRICING[undated] ? undated : undefined;
+  if (PRICING[undated]) return undated;
+  // Anything the wider resolution can price keeps its id verbatim: an external
+  // table and a local alias are both keyed on the string the tool reported, and
+  // stripping a date suffix off `gpt-5.2-20260101` would look up the wrong row.
+  return resolvePrice(model).origin === "none" ? undefined : model;
 }
 
 /** Days since the table was verified. CI asserts a ceiling, as preflight does. */

@@ -209,3 +209,110 @@ dialog .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
 .toast.info { border-left-color: var(--ul-accent); }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------------------------------------------------------------------------
+   Charts.
+   The six categorical hues are the dataviz reference theme, validated against
+   this app's surfaces with scripts/validate_palette.js — dark on #0F1419 and
+   light on #FFFFFF both pass. They are NOT the brand accent: Chain Teal sits at
+   L 0.775, outside the categorical lightness band, and pairing it with the rest
+   drops adjacent separation below the floor. The accent stays where it belongs,
+   on brand marks and single-series fills; series identity uses these.
+   A seventh series is never a new hue — it folds into --ul-faint as "N more".
+   --------------------------------------------------------------------------- */
+:root {
+  --viz-1: #3987e5;  /* blue    */
+  --viz-2: #d95926;  /* orange  */
+  --viz-3: #199e70;  /* aqua    */
+  --viz-4: #c98500;  /* yellow  */
+  --viz-5: #d55181;  /* magenta */
+  --viz-6: #9085e9;  /* violet  */
+}
+:root[data-theme="light"] {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #4a3aa7;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --viz-1: #2a78d6;
+    --viz-2: #eb6834;
+    --viz-3: #1baf7a;
+    --viz-4: #eda100;
+    --viz-5: #e87ba4;
+    --viz-6: #4a3aa7;
+  }
+}
+
+.metrics { display: none; padding: var(--ul-space-4); gap: var(--ul-space-4); flex-direction: column; }
+body[data-view="metrics"] .metrics { display: flex; }
+body[data-view="metrics"] .board,
+body[data-view="sessions"] .board { display: none; }
+.sessions { display: none; padding: var(--ul-space-4); }
+body[data-view="sessions"] .sessions { display: block; }
+
+.stat-row { display: flex; flex-wrap: wrap; gap: var(--ul-space-3); }
+.stat {
+  flex: 1 1 150px; min-width: 150px;
+  background: var(--ul-bg-raised); border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius); padding: var(--ul-space-3);
+}
+.stat-label { font-size: var(--ul-text-xs); color: var(--ul-muted);
+  text-transform: uppercase; letter-spacing: var(--ul-track-label); }
+.stat-value { font-family: var(--ul-font-mono); font-size: var(--ul-text-xl);
+  color: var(--ul-heading); margin-top: 2px; }
+.stat-note { font-size: var(--ul-text-xs); color: var(--ul-faint); margin-top: 3px; }
+
+.panel {
+  background: var(--ul-bg-raised); border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius); padding: var(--ul-space-3);
+}
+.panel h3 { margin: 0 0 2px; font-size: var(--ul-text-sm); color: var(--ul-heading); }
+.panel .blurb { margin: 0 0 var(--ul-space-3); font-size: var(--ul-text-xs); color: var(--ul-muted); }
+.panel-grid { display: grid; gap: var(--ul-space-3);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+
+.chart { width: 100%; height: auto; display: block; }
+.chart-axis { fill: var(--ul-faint); font-size: 10px; font-family: var(--ul-font-mono); }
+.chart-rows { display: flex; flex-direction: column; gap: 6px; }
+.chart-row { display: grid; grid-template-columns: 10px minmax(90px, 1fr) 2fr auto;
+  gap: var(--ul-space-2); align-items: center; font-size: var(--ul-text-xs); }
+.swatch { width: 10px; height: 10px; border-radius: 2px; }
+.chart-key { color: var(--ul-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-track { background: var(--ul-bg-inset); border-radius: 2px; height: 10px; overflow: hidden; }
+.chart-fill { display: block; height: 100%; border-radius: 2px; min-width: 2px; }
+.chart-detail { color: var(--ul-muted); font-family: var(--ul-font-mono); white-space: nowrap; }
+
+.legend { display: flex; flex-wrap: wrap; gap: var(--ul-space-3);
+  font-size: var(--ul-text-xs); color: var(--ul-muted); margin-top: var(--ul-space-2); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+.sess-table { width: 100%; border-collapse: collapse; font-size: var(--ul-text-xs); }
+.sess-table th { text-align: left; color: var(--ul-muted); font-weight: 600;
+  text-transform: uppercase; letter-spacing: var(--ul-track-label);
+  padding: 6px 8px; border-bottom: 1px solid var(--ul-line); }
+.sess-table td { padding: 6px 8px; border-bottom: 1px solid var(--ul-line);
+  color: var(--ul-body); font-family: var(--ul-font-mono); }
+.sess-table tr:hover td { background: var(--ul-bg-raised); }
+.sess-live { color: var(--ul-accent); }
+
+.tasklist { display: flex; flex-direction: column; gap: 4px; margin-top: var(--ul-space-2); }
+.tasklist li { list-style: none; display: flex; gap: var(--ul-space-2);
+  align-items: baseline; font-size: var(--ul-text-xs); color: var(--ul-body); }
+.tasklist .tstatus { font-family: var(--ul-font-mono); color: var(--ul-muted); min-width: 84px; }
+.tasklist .tstatus.in_progress { color: var(--ul-warn); }
+.tasklist .tstatus.completed { color: var(--ul-up); }
+
+.views { display: inline-flex; gap: 2px; background: var(--ul-bg-inset);
+  border-radius: var(--ul-radius); padding: 2px; }
+.view-btn { border: 0; background: transparent; color: var(--ul-muted);
+  padding: 4px 10px; font-size: var(--ul-text-xs); border-radius: var(--ul-radius-sm); }
+.view-btn[aria-selected="true"] { background: var(--ul-bg-raised); color: var(--ul-heading); }
+.input { width: 100%; margin-bottom: var(--ul-space-3); padding: 6px 8px;
+  background: var(--ul-bg-inset); border: 1px solid var(--ul-line);
+  border-radius: var(--ul-radius-sm); color: var(--ul-body);
+  font-family: var(--ul-font-mono); font-size: var(--ul-text-xs); }

@@ -15,4 +15,18 @@ export { spawnAgent, reprompt, reroute, stopSession, checkPrompt, checkCwd } fro
 export type { ActionContext, ActionResult, HeadlessResult, SpawnRequest } from "./actions.js";
 export { otterTasks, otterUrl, laneForOtter } from "./otter.js";
 export { renderBoard, tokens, money, age } from "./render.js";
+export { AdapterRegistry, SOURCE_TEMPLATES } from "./agents/registry.js";
+export type { AdapterStatus, RegistryResult } from "./agents/registry.js";
+export { DeclaredSourceAdapter, dig, findFiles, foldFile, loadSources, sourcesPath } from "./agents/jsonl.js";
+export type { SourceFields, SourceSpec } from "./agents/jsonl.js";
+export type { AdapterContext, AdapterResult, AgentAdapter, Probe } from "./agents/types.js";
+export { resolvePrice, reloadPricing, externalPricing } from "./pricing.js";
+export type { PriceOrigin, PricedModel } from "./pricing.js";
+export { isLocalModel, loadExternalPricing, pricingPath, stalenessDays, LOCAL_REASON } from "./providers.js";
+export { bucketWidth, computeMetrics } from "./metrics.js";
+export type { Bucket, Metrics, Slice } from "./metrics.js";
+export { listSessions, registryRows, unslug } from "./sessions.js";
+export type { SessionArchive, SessionRow } from "./sessions.js";
+export { countTasks, createTask, nextId, readTasks, sessionsWithTasks, setTaskStatus } from "./tasks.js";
+export type { AgentTask, TaskCounts, TaskList, TaskStatus } from "./tasks.js";
 export * from "./types.js";

@@ -1,0 +1,5 @@
+{"id":"msg_1","model":"gpt-5.2","created_at":"2026-08-17T10:00:00Z","title":"Refactor the parser","cwd":"/home/w/dev/parser","usage":{"input_tokens":1200,"output_tokens":300,"cached_tokens":800}}
+{"id":"msg_1","model":"gpt-5.2","created_at":"2026-08-17T10:00:01Z","usage":{"input_tokens":1200,"output_tokens":300,"cached_tokens":800}}
+{"id":"msg_1","model":"gpt-5.2","created_at":"2026-08-17T10:00:02Z","usage":{"input_tokens":1200,"output_tokens":300,"cached_tokens":800}}
+{"id":"msg_2","model":"gpt-5.2","created_at":"2026-08-17T10:05:00Z","usage":{"input_tokens":50,"output_tokens":700,"cached_tokens":2400}}
+this line is not json at all
