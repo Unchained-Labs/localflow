@@ -19,13 +19,32 @@
   <div class="totals" id="totals" aria-live="polite"></div>
 
   <div class="top-right">
+    <nav class="views" role="tablist" aria-label="View">
+      <button class="btn view-btn" data-view="board" role="tab" aria-selected="true">Board</button>
+      <button class="btn view-btn" data-view="metrics" role="tab" aria-selected="false">Metrics</button>
+      <button class="btn view-btn" data-view="sessions" role="tab" aria-selected="false">Sessions</button>
+    </nav>
     <span class="pill" id="mode" title="Actions are off unless localflow was started with --allow-actions">read-only</span>
     <span class="pill live" id="live"><i></i>connecting</span>
     <button class="btn primary" id="new-task" hidden>New task</button>
   </div>
 </header>
 
-<main id="board" class="board" aria-label="Claude Code sessions on this machine"></main>
+<main id="board" class="board" aria-label="Agent sessions on this machine"></main>
+
+<section id="metrics" class="metrics" aria-label="Observed metrics"></section>
+
+<section id="sessions" class="sessions" aria-label="Every session on this machine">
+  <div class="panel">
+    <h3>Every session</h3>
+    <p class="blurb">
+      Every transcript on disk plus the live registry — not just the recent ones the
+      board keeps. Rows are filenames and sizes; open one on the board to see what it cost.
+    </p>
+    <input id="sess-q" class="input" type="search" placeholder="filter by id, path or name" aria-label="Filter sessions">
+    <div id="sess-body"></div>
+  </div>
+</section>
 
 <p class="degraded" id="degraded" hidden></p>
 

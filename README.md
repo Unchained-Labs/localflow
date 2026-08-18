@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/logo/lockup-horizontal.svg" width="220" alt="localflow">
-  <h3>A Kanban board for the Claude Code sessions<br>already running on your machine.</h3>
+  <h3>A Kanban board for the agent sessions<br>already running on your machine.</h3>
   <p>
     <a href="https://unchained-labs.github.io/localflow/">Docs</a> ·
     <a href="https://unchained-labs.github.io/">Unchained Labs</a> ·
@@ -95,6 +95,103 @@ The test suite re-runs that check against a captured fixture, so a rate change
 fails the build instead of quietly changing your bill. Where no price is known
 for a model the card says **cost unknown**, never `$0.00` — the first is a fact,
 the second is a lie.
+
+## Other tools, without guessing at them
+
+The Claude Code reader is a real parser, and it is real because everything in it
+was checked against a machine that has Claude Code on it. Codex CLI, Gemini CLI,
+Aider and OpenCode are not on that machine. Writing four scrapers for their
+formats from memory would produce four files that look like support and are
+actually guesses — and a guess that parses something is worse than no adapter,
+because it puts a number on the board.
+
+So localflow does not guess the shape. You describe it, once, in
+`~/.localflow/sources.json`:
+
+```json
+{ "sources": [{
+    "id": "codex",
+    "root": "~/.codex/sessions",
+    "fields": {
+      "model": "model", "input": "usage.input_tokens",
+      "output": "usage.output_tokens", "messageId": "id"
+    }
+}]}
+```
+
+Those cards then sit on the same board, in the same lanes, with the same rules.
+The one field worth getting right is `messageId` — tools that stream re-emit the
+same usage object, and summing every line inflated output tokens 2.25× on a real
+Claude transcript. Leave it out and the board says so rather than quietly
+inflating your totals. Full guide: [`docs/sources.md`](docs/sources.md).
+
+## Prices you can check
+
+The Anthropic table is in the repo and CI asserts it against
+[preflight](https://github.com/Unchained-Labs/preflight), so a rate change fails
+the build. That guarantee cannot extend to anyone else's rate card — nothing
+here watches OpenAI's pricing page — so other vendors' rates are **data you
+supply**, in `~/.localflow/pricing.json`, with the date you last checked them.
+The board shows how stale that is, because a price table with no age on it is
+indistinguishable from a correct one.
+
+Until you supply a rate, those cards show tokens and no dollar figure. Same rule
+as always: **cost unknown, never `$0.00`.**
+
+Models served from your own hardware — LeHarness on a Spark, Ollama on a laptop —
+are priced at **0**, and that zero is a different claim from the `null` above.
+There is no per-token bill. The bill was the machine.
+
+## Metrics
+
+```sh
+localflow metrics | jq .totals
+```
+
+Or the **Metrics** tab: spend and sessions over time, tokens by model, by tool
+and by project, the observed fan-out histogram, and tool-call counts. Two rules
+the charts follow, both about omission rather than arithmetic:
+
+- **An unpriced session is excluded from spend and hatched on the chart**, never
+  folded in as zero. A flat line through a period that actually cost something
+  is the failure mode worth engineering against.
+- **A bucket nothing landed in is still drawn**, because dropping it turns a
+  quiet week into a straight line between two busy ones.
+
+Six categorical hues, validated for colour-vision separation and contrast
+against this app's own surfaces. A seventh series is never a new hue — it folds
+into a labelled neutral.
+
+## Every session, not just the recent ones
+
+The board keeps a bounded history on purpose; a machine with a year of sessions
+behind it should not open onto a scrollable archive. "Show me everything" is a
+different question:
+
+```sh
+localflow sessions            # every transcript on disk, plus the live registry
+localflow sessions chezmoi    # filtered
+localflow tasks <sessionId>   # that session's task list
+```
+
+## Tasks
+
+Claude Code keeps a task list per session under `~/.claude/tasks/`. localflow
+reads it onto the card and can add to it (`--allow-actions`). There is
+deliberately no delete: the agent may be working from that list right now, and
+removing an item under it is the one edit that could make a session act on a
+task that no longer exists.
+
+## Running it as a service
+
+```sh
+make up                          # build, serve on 127.0.0.1:7317, detached
+make up ACTIONS=1 ROOTS=~/dev    # ...and permit spawn/reprompt/stop under ~/dev
+make down / make logs / make status
+```
+
+It runs on the host, not in a container, and that is not an oversight: it needs
+`~/.claude/sessions` (mode 0700) and the `claude` binary on PATH.
 
 ## The graph that actually ran
 

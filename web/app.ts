@@ -72,6 +72,8 @@ const LANES: { lane: Lane; label: string; blurb: string }[] = [
   { lane: "ended", label: "ended", blurb: "No longer in the registry. Whether it succeeded is not recorded." },
 ];
 
+import { OTHER, breakdown, histogram, seriesColor, statTile, timeBars } from "./charts.js";
+
 const $ = <T extends Element = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 let board: Board | null = null;
@@ -679,9 +681,263 @@ async function init(): Promise<void> {
   $("#d-close").addEventListener("click", closeDrawer);
   $("#scrim").addEventListener("click", closeDrawer);
   $("#new-task").addEventListener("click", () => openDialog("spawn"));
+  wireViews();
   wireDialog();
   wireDnD();
   connect();
 }
 
 void init();
+
+
+/* ---------------------------------------------------------------------------
+ * Metrics and the session archive.
+ *
+ * Both are pull-on-demand rather than pushed down the board's event stream: the
+ * board updates every two seconds and neither of these changes at that rate, so
+ * streaming them would be a lot of bytes to redraw a chart that looks the same.
+ * ------------------------------------------------------------------------- */
+
+type View = "board" | "metrics" | "sessions";
+
+interface Slice { key: string; sessions: number; usage: Usage; costUsd: number | null; unpriced: number }
+interface MetricsPayload {
+  buckets: { at: number; sessions: number; costUsd: number; unpriced: number; usage: Usage }[];
+  bucketMs: number;
+  byModel: Slice[];
+  bySource: Slice[];
+  byCwd: Slice[];
+  totals: {
+    sessions: number; usage: Usage; costUsd: number | null; unpricedSessions: number;
+    cacheHitRate: number | null; toolErrors: number; toolCalls: number;
+  };
+  fanoutWidths: { width: number; count: number; failed: number }[];
+  tools: { name: string; calls: number }[];
+}
+
+function panel(heading: string, blurb: string, body: Node): HTMLElement {
+  const wrap = el("div", { className: "panel" });
+  wrap.append(el("h3", { textContent: heading }), el("p", { className: "blurb", textContent: blurb }), body as HTMLElement);
+  return wrap;
+}
+
+/** A legend, always, for anything with more than one colour in it. */
+function legend(keys: string[]): HTMLElement {
+  const box = el("div", { className: "legend" });
+  keys.forEach((k, i) => {
+    const item = document.createElement("span");
+    const dot = document.createElement("i");
+    dot.style.background = i < 6 ? seriesColor(i) : OTHER;
+    item.append(dot, document.createTextNode(k));
+    box.append(item);
+  });
+  return box;
+}
+
+function bucketLabel(at: number, width: number): string {
+  const d = new Date(at);
+  const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return width < 24 * 3600_000
+    ? `${day} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`
+    : day;
+}
+
+async function renderMetrics(): Promise<void> {
+  const host = $("#metrics");
+  host.textContent = "";
+  let m: MetricsPayload;
+  try {
+    m = (await (await fetch("/api/metrics")).json()) as MetricsPayload;
+  } catch (e) {
+    host.append(panel("Metrics", "Could not read the metrics.", document.createTextNode(String(e))));
+    return;
+  }
+
+  const t = m.totals;
+  const stats = el("div", { className: "stat-row" });
+  stats.append(
+    statTile("Sessions", String(t.sessions)),
+    statTile("Output", tokens(t.usage.output)),
+    statTile("Cached in", tokens(t.usage.cacheRead)),
+    statTile(
+      "Spend",
+      money(t.costUsd),
+      // The count of unpriced sessions rides with the figure rather than beside
+      // it, because a total is only honest if you can see what it left out.
+      t.unpricedSessions ? `${t.unpricedSessions} session(s) not included — no price known` : "every session priced",
+    ),
+    statTile(
+      "Cache hit rate",
+      t.cacheHitRate === null ? "unknown" : `${Math.round(t.cacheHitRate * 100)}%`,
+      "share of input served from cache",
+    ),
+    statTile(
+      "Tool errors",
+      String(t.toolErrors),
+      `${t.toolCalls.toLocaleString()} calls`,
+    ),
+  );
+  host.append(stats);
+
+  const grid = el("div", { className: "panel-grid" });
+
+  grid.append(
+    panel(
+      "Spend over time",
+      `One bar per ${Math.round(m.bucketMs / 60000)} minutes. Hatched means work nobody could price — it happened, and no total above includes it.`,
+      timeBars(
+        m.buckets.map((b) => ({
+          at: b.at,
+          value: b.costUsd,
+          // A bucket with unpriced sessions gets a hatch sized by session count
+          // scaled onto the money axis — enough to be visible, never a claim
+          // about how much it cost.
+          unpriced: b.unpriced ? Math.max(b.costUsd * 0.08, 0.5) : 0,
+          label: bucketLabel(b.at, m.bucketMs),
+        })),
+        { format: (n) => money(n) },
+      ),
+    ),
+  );
+
+  grid.append(
+    panel(
+      "Sessions over time",
+      "How busy the machine was, in the same buckets.",
+      timeBars(
+        m.buckets.map((b) => ({ at: b.at, value: b.sessions, label: bucketLabel(b.at, m.bucketMs) })),
+      ),
+    ),
+  );
+
+  const modelRows = m.byModel.map((s) => ({
+    key: shortModel(s.key) || s.key,
+    value: s.usage.output + s.usage.input + s.usage.cacheRead,
+    detail: s.costUsd === null ? "cost unknown" : money(s.costUsd),
+    unpriced: s.costUsd === null,
+  }));
+  const models = document.createElement("div");
+  models.append(breakdown(modelRows), legend(modelRows.slice(0, 6).map((r) => r.key)));
+  grid.append(panel("By model", "Tokens handled, priced where a rate is known.", models));
+
+  const srcRows = m.bySource.map((s) => ({
+    key: s.key,
+    value: s.sessions,
+    detail: `${s.sessions} session${s.sessions === 1 ? "" : "s"}`,
+  }));
+  const sources = document.createElement("div");
+  sources.append(breakdown(srcRows), legend(srcRows.slice(0, 6).map((r) => r.key)));
+  grid.append(
+    panel(
+      "By tool",
+      "Which agent produced the work. Add more in ~/.localflow/sources.json.",
+      sources,
+    ),
+  );
+
+  grid.append(
+    panel(
+      "By project",
+      "Last two path segments of each session's working directory.",
+      breakdown(
+        m.byCwd.map((s) => ({
+          key: s.key,
+          value: s.usage.output,
+          detail: s.costUsd === null ? "cost unknown" : money(s.costUsd),
+          unpriced: s.costUsd === null,
+        })),
+      ),
+    ),
+  );
+
+  grid.append(
+    panel(
+      "Observed fan-out",
+      "How wide the parallelism actually got. Red is the share that came back with a tool error.",
+      m.fanoutWidths.length
+        ? histogram(m.fanoutWidths.map((f) => ({ bin: String(f.width), count: f.count, bad: f.failed })))
+        : el("p", { className: "blurb", textContent: "No fan-outs recorded yet." }),
+    ),
+  );
+
+  grid.append(
+    panel(
+      "Tools used",
+      "Calls per tool across every session on the board.",
+      breakdown(
+        m.tools.map((t2) => ({ key: t2.name, value: t2.calls, detail: t2.calls.toLocaleString() })),
+        { max: 8 },
+      ),
+    ),
+  );
+
+  host.append(grid);
+}
+
+interface SessionRow {
+  sessionId: string; cwd: string; bytes: number; updatedAt: number;
+  live: boolean; status?: string; name?: string;
+}
+
+async function renderSessions(query = ""): Promise<void> {
+  const body = $("#sess-body");
+  body.textContent = "loading…";
+  let data: { rows: SessionRow[]; total: number; truncated: number };
+  try {
+    data = await (await fetch(`/api/sessions?limit=300&q=${encodeURIComponent(query)}`)).json();
+  } catch (e) {
+    body.textContent = `could not read sessions: ${String(e)}`;
+    return;
+  }
+  body.textContent = "";
+
+  const table = document.createElement("table");
+  table.className = "sess-table";
+  table.innerHTML =
+    "<thead><tr><th>session</th><th>where</th><th>size</th><th>last active</th><th>state</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  for (const r of data.rows) {
+    const tr = document.createElement("tr");
+    for (const text of [
+      r.name ?? r.sessionId.slice(0, 8),
+      tilde(r.cwd),
+      r.bytes ? `${(r.bytes / 1e6).toFixed(1)} MB` : "—",
+      age(Date.now() - r.updatedAt),
+    ]) {
+      tr.append(el("td", { textContent: text }));
+    }
+    const state = el("td", { textContent: r.live ? (r.status ?? "live") : "ended" });
+    if (r.live) state.className = "sess-live";
+    tr.append(state);
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  body.append(table);
+
+  const note = el("p", { className: "blurb" });
+  note.textContent = data.truncated
+    ? `${data.rows.length} of ${data.total} — ${data.truncated} more not shown. Narrow the filter.`
+    : `${data.total} session${data.total === 1 ? "" : "s"} on this machine.`;
+  body.append(note);
+}
+
+function setView(view: View): void {
+  document.body.dataset.view = view;
+  for (const btn of document.querySelectorAll<HTMLElement>(".view-btn")) {
+    btn.setAttribute("aria-selected", String(btn.dataset.view === view));
+  }
+  if (view === "metrics") void renderMetrics();
+  if (view === "sessions") void renderSessions(($("#sess-q") as HTMLInputElement).value);
+}
+
+function wireViews(): void {
+  document.body.dataset.view = "board";
+  for (const btn of document.querySelectorAll<HTMLElement>(".view-btn")) {
+    btn.addEventListener("click", () => setView((btn.dataset.view ?? "board") as View));
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  $("#sess-q").addEventListener("input", (e) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => void renderSessions((e.target as HTMLInputElement).value), 200);
+  });
+}

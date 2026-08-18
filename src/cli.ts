@@ -5,6 +5,9 @@ import { notesFor, observedSpec } from "./graph.js";
 import { PRICING_VERIFIED, pricingAgeDays } from "./pricing.js";
 import { LocalflowServer } from "./server.js";
 import { renderBoard } from "./render.js";
+import { computeMetrics } from "./metrics.js";
+import { listSessions } from "./sessions.js";
+import { countTasks, readTasks } from "./tasks.js";
 import type { Task } from "./types.js";
 
 const VERSION = "0.1.0";
@@ -16,6 +19,9 @@ USAGE
   localflow board                  print the board once and exit
   localflow graph <sessionId>      the graph that session actually ran, as a spec
   localflow calibrate              the measured cache hit rate, for preflight.json
+  localflow sessions [query]       every session on this machine, not just recent ones
+  localflow tasks <sessionId>      that session's task list
+  localflow metrics                the numbers behind the plots, as JSON
 
 OPTIONS
   --port N                 default 7317
@@ -77,7 +83,51 @@ async function main(): Promise<number> {
     url: flag(argv, "--otter"),
   };
 
-  if (cmd === "board" || cmd === "graph" || cmd === "calibrate") {
+  if (cmd === "sessions") {
+    const query = argv.slice(1).find((a) => !a.startsWith("-"));
+    const archive = listSessions({ query, limit: Number(flag(argv, "--limit") ?? 0) });
+    if (format === "json") {
+      process.stdout.write(`${JSON.stringify(archive, null, 2)}\n`);
+      return 0;
+    }
+    for (const r of archive.rows) {
+      const size = r.bytes ? `${(r.bytes / 1e6).toFixed(1)}MB` : "     -";
+      process.stdout.write(
+        `${r.live ? "*" : " "} ${r.sessionId}  ${size.padStart(7)}  ${r.cwd}\n`,
+      );
+    }
+    // The count goes to stderr so `localflow sessions | wc -l` still counts rows.
+    process.stderr.write(
+      `\n  ${archive.total} session(s)${archive.truncated ? `, ${archive.truncated} not shown` : ""}` +
+        `${archive.unreadable.length ? `, ${archive.unreadable.length} unreadable director(y|ies)` : ""}\n`,
+    );
+    return 0;
+  }
+
+  if (cmd === "tasks") {
+    const id = argv.slice(1).find((a) => !a.startsWith("-"));
+    if (!id) {
+      console.error("usage: localflow tasks <sessionId>");
+      return 2;
+    }
+    const list = readTasks(id);
+    if (format === "json") {
+      process.stdout.write(`${JSON.stringify({ ...list, counts: countTasks(list) }, null, 2)}\n`);
+      return 0;
+    }
+    if (!list.tasks.length) {
+      process.stderr.write(`  no task list for session ${id}\n`);
+      return 0;
+    }
+    for (const t of list.tasks) {
+      process.stdout.write(`  ${t.id.padStart(3)}  ${t.status.padEnd(12)}  ${t.subject}\n`);
+    }
+    const c = countTasks(list);
+    process.stderr.write(`\n  ${c.completed}/${c.total} done, ${c.in_progress} in progress\n`);
+    return 0;
+  }
+
+  if (cmd === "board" || cmd === "graph" || cmd === "calibrate" || cmd === "metrics") {
     const board = new Board(common);
     let summary;
     try {
@@ -85,6 +135,13 @@ async function main(): Promise<number> {
     } catch (e) {
       console.error(`localflow: ${(e as Error).message}`);
       return 2;
+    }
+
+    if (cmd === "metrics") {
+      // JSON only: these are inputs to a chart, and an ASCII rendering of a
+      // 60-bucket time series would be a worse chart than no chart.
+      process.stdout.write(`${JSON.stringify(computeMetrics(summary), null, 2)}\n`);
+      return 0;
     }
 
     if (cmd === "board") {

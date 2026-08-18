@@ -35,6 +35,15 @@ import type { BoardOptions } from "./board.js";
 import { notesFor, observedSpec } from "./graph.js";
 import { otterTasks, otterUrl } from "./otter.js";
 import { summarise } from "./board.js";
+import { AdapterRegistry } from "./agents/registry.js";
+import type { AdapterStatus } from "./agents/registry.js";
+import { computeMetrics } from "./metrics.js";
+import { externalPricing, reloadPricing } from "./pricing.js";
+import { pricingPath, stalenessDays } from "./providers.js";
+import { sourcesPath } from "./agents/jsonl.js";
+import { listSessions } from "./sessions.js";
+import { countTasks, createTask, readTasks, setTaskStatus } from "./tasks.js";
+import type { TaskStatus } from "./tasks.js";
 import type { BoardSummary, Task } from "./types.js";
 
 export interface ServerOptions extends BoardOptions {
@@ -91,12 +100,19 @@ export class LocalflowServer {
   private readonly clients = new Set<ServerResponse>();
   private latest: BoardSummary | null = null;
   private lastError: string | null = null;
+  private readonly registry = new AdapterRegistry();
+  private adapterStatus: AdapterStatus[] = [];
+  private sourcesError: string | undefined;
   private timer: NodeJS.Timeout | null = null;
   private http: Server | null = null;
 
   constructor(opts: ServerOptions = {}) {
     this.opts = { port: 7317, host: "127.0.0.1", pollMs: 2_000, ...opts };
     this.board = new Board(opts);
+    // Declared sources are read once at construction. Editing sources.json is
+    // a restart, which is the right cost for a file that changes about as often
+    // as you install a new agent CLI.
+    this.sourcesError = this.registry.addDeclared().error;
   }
 
   async start(): Promise<{ url: string }> {
@@ -131,6 +147,19 @@ export class LocalflowServer {
           Object.assign(summary, summarise([...summary.tasks, ...tasks], summary.degraded, this.opts.asOf));
         }
       }
+
+      // Everything declared in sources.json. Merged the same way Otter is, so
+      // a card from another tool is a card like any other on the board.
+      const extra = await this.registry.poll({ asOf: this.opts.asOf, history: this.opts.history });
+      this.adapterStatus = extra.adapters;
+      if (this.sourcesError) summary.degraded.push({ id: "sources", reason: this.sourcesError });
+      summary.degraded.push(...extra.degraded);
+      if (extra.tasks.length) {
+        Object.assign(
+          summary,
+          summarise([...summary.tasks, ...extra.tasks], summary.degraded, this.opts.asOf),
+        );
+      }
       this.latest = summary;
       this.lastError = null;
     } catch (e) {
@@ -164,13 +193,45 @@ export class LocalflowServer {
     }
 
     if (url.pathname === "/api/health") {
+      const today = new Date(Date.now()).toISOString().slice(0, 10);
+      const ext = externalPricing();
       return send(res, 200, {
         ok: this.lastError === null,
         error: this.lastError,
         actions: Boolean(this.opts.allowActions),
         sessions: this.latest?.totals.sessions ?? 0,
         otter: otterUrl(this.opts) ?? null,
+        adapters: this.adapterStatus,
+        sourcesPath: sourcesPath(),
+        pricing: {
+          path: pricingPath(),
+          models: Object.keys(ext.models).length,
+          verified: ext.verified ?? null,
+          // Shown so a stale table is visible as stale rather than trusted.
+          ageDays: stalenessDays(ext.verified, today),
+          error: ext.error ?? null,
+        },
       });
+    }
+
+    if (url.pathname === "/api/metrics") {
+      if (!this.latest) return send(res, 503, { error: this.lastError ?? "no board yet" });
+      return send(res, 200, computeMetrics(this.latest));
+    }
+
+    if (url.pathname === "/api/sessions") {
+      const limit = Number(url.searchParams.get("limit") ?? 200);
+      return send(res, 200, listSessions({
+        ...this.opts,
+        limit: Number.isFinite(limit) && limit > 0 ? limit : 200,
+        query: url.searchParams.get("q") ?? undefined,
+      }));
+    }
+
+    const tasksFor = /^\/api\/session\/([^/]+)\/tasks$/.exec(url.pathname);
+    if (tasksFor && req.method === "GET") {
+      const list = readTasks(decodeURIComponent(tasksFor[1]!), this.opts);
+      return send(res, 200, { ...list, counts: countTasks(list) });
     }
 
     if (url.pathname === "/api/board") {
@@ -188,6 +249,12 @@ export class LocalflowServer {
     }
 
     if (url.pathname.startsWith("/api/actions/")) return await this.action(url.pathname, req, res);
+
+    if (url.pathname === "/api/pricing/reload") {
+      reloadPricing();
+      const ext = externalPricing();
+      return send(res, 200, { models: Object.keys(ext.models).length, error: ext.error ?? null });
+    }
 
     if (url.pathname.startsWith("/api/")) return send(res, 404, { error: "no such endpoint" });
 
@@ -284,6 +351,31 @@ export class LocalflowServer {
       case "stop": {
         if (!task) return send(res, 404, { error: "no such task on the current board" });
         return send(res, 200, stopSession(task.pid, id));
+      }
+
+      // Writes into a session's own task list. Behind --allow-actions with the
+      // rest, because it edits state a running agent reads from.
+      case "task": {
+        const result = createTask(
+          {
+            sessionId: String(body.sessionId ?? ""),
+            subject: String(body.subject ?? ""),
+            description: optional(body.description),
+            activeForm: optional(body.activeForm),
+          },
+          this.opts,
+        );
+        return send(res, result.ok ? 200 : 400, { ...result, action: "task" });
+      }
+
+      case "task-status": {
+        const result = setTaskStatus(
+          String(body.sessionId ?? ""),
+          String(body.taskId ?? ""),
+          String(body.status ?? "") as TaskStatus,
+          this.opts,
+        );
+        return send(res, result.ok ? 200 : 400, { ...result, action: "task-status" });
       }
 
       default:

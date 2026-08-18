@@ -119,7 +119,15 @@ export type Outcome = "unknown" | "errors-seen";
 
 export interface Task {
   id: string;
-  source: "claude" | "otter";
+  /**
+   * Which adapter produced this card.
+   *
+   * Deliberately an open string rather than a union. It was `"claude" | "otter"`
+   * while those were the only two readers, and every new tool meant editing this
+   * line — which is the compiler telling you the set is not closed. The adapter
+   * registry owns the values now; the board only needs to group by them.
+   */
+  source: string;
   lane: Lane;
   outcome: Outcome;
   title: string;
