@@ -138,8 +138,10 @@ export async function probeSoif(opts: WaterOptions = {}): Promise<{ ok: boolean;
       return {
         ok: false,
         detail:
-          "soif is not installed, so there is no water estimate. `pip install soif-llm` " +
-          "(the module is `soif`; the PyPI name was taken).",
+          "soif is not installed, so there is no water estimate. Install it with " +
+          "`uv tool install git+https://github.com/Unchained-Labs/soif` — soif's own README " +
+          "says `pip install soif-llm`, but that distribution is not on PyPI yet (404 as of " +
+          "2026-08-18), so the git URL is the one that works today.",
       };
     }
     return { ok: false, detail: `could not run soif: ${(e as Error).message}` };
