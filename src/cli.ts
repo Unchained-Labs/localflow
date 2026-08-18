@@ -7,6 +7,7 @@ import { LocalflowServer } from "./server.js";
 import { renderBoard } from "./render.js";
 import { computeMetrics } from "./metrics.js";
 import { listSessions } from "./sessions.js";
+import { humanize, waterFor } from "./water.js";
 import { countTasks, readTasks } from "./tasks.js";
 import type { Task } from "./types.js";
 
@@ -22,6 +23,7 @@ USAGE
   localflow sessions [query]       every session on this machine, not just recent ones
   localflow tasks <sessionId>      that session's task list
   localflow metrics                the numbers behind the plots, as JSON
+  localflow water                  freshwater these sessions cost, via soif
 
 OPTIONS
   --port N                 default 7317
@@ -127,7 +129,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (cmd === "board" || cmd === "graph" || cmd === "calibrate" || cmd === "metrics") {
+  if (cmd === "board" || cmd === "graph" || cmd === "calibrate" || cmd === "metrics" || cmd === "water") {
     const board = new Board(common);
     let summary;
     try {
@@ -135,6 +137,49 @@ async function main(): Promise<number> {
     } catch (e) {
       console.error(`localflow: ${(e as Error).message}`);
       return 2;
+    }
+
+    if (cmd === "water") {
+      const { computeMetrics: cm } = await import("./metrics.js");
+      const report = await waterFor(
+        cm(summary).byModel.map((m) => ({
+          model: m.key,
+          input: m.usage.input,
+          output: m.usage.output,
+          cached: m.usage.cacheRead,
+        })),
+        { region: flag(argv, "--region") },
+      );
+      if (format === "json") {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        return report.ok ? 0 : 1;
+      }
+      if (!report.ok) {
+        process.stderr.write(`  ${report.detail}\n`);
+        return 1;
+      }
+      process.stdout.write(`\n  ${humanize(report.total)} of freshwater\n\n`);
+      for (const s2 of report.byModel) {
+        process.stdout.write(
+          `  ${s2.model.padEnd(24)} ${humanize(s2.ml)}${s2.assumed ? "  [assumed tier]" : ""}\n`,
+        );
+      }
+      // Provenance on stderr so `localflow water | ...` stays parseable, and so
+      // the caveats are impossible to miss when a human runs it.
+      if (report.assumedModels.length) {
+        process.stderr.write(
+          `\n  ! ${report.assumedModels.join(", ")}: soif had no factors and assumed a tier.\n` +
+            "    Tier is worth roughly 30x across the range — treat those rows as the weakest part.\n",
+        );
+      }
+      for (const u of report.unknown) {
+        process.stderr.write(`\n  · ${u.model}: ${u.reason} (excluded from the total)\n`);
+      }
+      process.stderr.write(
+        `\n  soif ${report.version ?? "?"}, factors ${report.factorsVersion ?? "?"}, region ${report.region}.\n` +
+          "  Estimates, not measurements — read soif's METHODOLOGY.md before quoting them.\n\n",
+      );
+      return 0;
     }
 
     if (cmd === "metrics") {

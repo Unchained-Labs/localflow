@@ -24,6 +24,8 @@ export { resolvePrice, reloadPricing, externalPricing } from "./pricing.js";
 export type { PriceOrigin, PricedModel } from "./pricing.js";
 export { isLocalModel, loadExternalPricing, pricingPath, stalenessDays, LOCAL_REASON } from "./providers.js";
 export { bucketWidth, computeMetrics } from "./metrics.js";
+export { humanize as humanizeWater, probeSoif, waterFor } from "./water.js";
+export type { ModelUsage, Triple, WaterOptions, WaterReport, WaterSlice } from "./water.js";
 export type { Bucket, Metrics, Slice } from "./metrics.js";
 export { listSessions, registryRows, unslug } from "./sessions.js";
 export type { SessionArchive, SessionRow } from "./sessions.js";

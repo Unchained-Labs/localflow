@@ -701,6 +701,15 @@ void init();
 type View = "board" | "metrics" | "sessions";
 
 interface Slice { key: string; sessions: number; usage: Usage; costUsd: number | null; unpriced: number }
+interface WaterTriple { low: number; mid: number; high: number }
+interface WaterPayload {
+  ok: boolean; detail: string; version?: string; factorsVersion?: string;
+  total: WaterTriple; region: string; includeEmbodied: boolean;
+  byModel: { model: string; ml: WaterTriple; tier?: string; assumed: boolean; assumptions: string[] }[];
+  unknown: { model: string; reason: string }[];
+  assumedModels: string[];
+}
+
 interface MetricsPayload {
   buckets: { at: number; sessions: number; costUsd: number; unpriced: number; usage: Usage }[];
   bucketMs: number;
@@ -713,6 +722,14 @@ interface MetricsPayload {
   };
   fanoutWidths: { width: number; count: number; failed: number }[];
   tools: { name: string; calls: number }[];
+  water?: WaterPayload;
+}
+
+/** Millilitres in words. Mirrors src/water.ts so the CLI and the UI agree. */
+function ml(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)} L`;
+  if (n >= 10) return `${n.toFixed(0)} mL`;
+  return `${n.toFixed(2)} mL`;
 }
 
 function panel(heading: string, blurb: string, body: Node): HTMLElement {
@@ -871,7 +888,71 @@ async function renderMetrics(): Promise<void> {
     ),
   );
 
+  if (m.water) host.append(waterPanel(m.water));
+
   host.append(grid);
+}
+
+/**
+ * What the answers cost in freshwater, via soif.
+ *
+ * The range is never dropped. soif exists because published per-prompt figures
+ * span two orders of magnitude — Google measured 0.26 mL for a median Gemini
+ * prompt, Mistral's LCA reports 45 mL for a 400-token response — so a bare
+ * midpoint would throw away the only honest part of the estimate.
+ */
+function waterPanel(w: WaterPayload): HTMLElement {
+  if (!w.ok) {
+    return panel("Water", w.detail, el("p", { className: "blurb", textContent: "No estimate." }));
+  }
+
+  const body = document.createElement("div");
+  const hero = el("div", { className: "stat-row" });
+  hero.append(
+    statTile(
+      "Freshwater",
+      ml(w.total.mid),
+      `range ${ml(w.total.low)} – ${ml(w.total.high)}`,
+    ),
+  );
+  body.append(hero);
+
+  body.append(
+    breakdown(
+      w.byModel.map((s) => ({
+        key: `${shortModel(s.model) || s.model}${s.assumed ? " (assumed tier)" : ""}`,
+        value: s.ml.mid,
+        detail: ml(s.ml.mid),
+        // An estimate resting on a guessed tier is drawn hollow, the same way an
+        // unpriced model is: a tier is worth ~30x, so the two are not the same
+        // claim and must not look alike.
+        unpriced: s.assumed,
+      })),
+    ),
+  );
+
+  const notes: string[] = [];
+  if (w.assumedModels.length) {
+    notes.push(
+      `soif had no factors for ${w.assumedModels.join(", ")} and assumed a capability tier — ` +
+        "tier is worth roughly 30x across the range, so treat those rows as the weakest part of this total.",
+    );
+  }
+  if (w.unknown.length) {
+    notes.push(`${w.unknown.length} model(s) could not be estimated and are excluded from the total.`);
+  }
+  notes.push(
+    `soif ${w.version ?? "?"}, factors ${w.factorsVersion ?? "?"}, region ${w.region}` +
+      `${w.includeEmbodied ? ", including embodied manufacturing water" : ", operational water only"}. ` +
+      "Estimates, not measurements — see soif's METHODOLOGY.md before quoting them.",
+  );
+  for (const n of notes) body.append(el("p", { className: "blurb", textContent: n }));
+
+  return panel(
+    "Water",
+    "Cooling-tower evaporation plus the water consumed generating the electricity, estimated by soif from the same token counts as the spend above.",
+    body,
+  );
 }
 
 interface SessionRow {

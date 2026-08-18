@@ -38,6 +38,7 @@ import { summarise } from "./board.js";
 import { AdapterRegistry } from "./agents/registry.js";
 import type { AdapterStatus } from "./agents/registry.js";
 import { computeMetrics } from "./metrics.js";
+import { waterFor } from "./water.js";
 import { externalPricing, reloadPricing } from "./pricing.js";
 import { pricingPath, stalenessDays } from "./providers.js";
 import { sourcesPath } from "./agents/jsonl.js";
@@ -216,7 +217,19 @@ export class LocalflowServer {
 
     if (url.pathname === "/api/metrics") {
       if (!this.latest) return send(res, 503, { error: this.lastError ?? "no board yet" });
-      return send(res, 200, computeMetrics(this.latest));
+      const metrics = computeMetrics(this.latest);
+      // Water comes from soif, one subprocess per model. On-demand rather than
+      // in the poll loop: nobody needs it refreshed every two seconds, and the
+      // board must not slow down for a panel that is not on screen.
+      const water = await waterFor(
+        metrics.byModel.map((m) => ({
+          model: m.key,
+          input: m.usage.input,
+          output: m.usage.output,
+          cached: m.usage.cacheRead,
+        })),
+      );
+      return send(res, 200, { ...metrics, water });
     }
 
     if (url.pathname === "/api/sessions") {

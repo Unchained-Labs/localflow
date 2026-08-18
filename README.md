@@ -162,6 +162,44 @@ Six categorical hues, validated for colour-vision separation and contrast
 against this app's own surfaces. A seventh series is never a new hue — it folds
 into a labelled neutral.
 
+## Water
+
+Every answer evaporates real freshwater — cooling towers on-site, power plants
+off-site. localflow already has the token counts, so it hands them to
+[soif](https://github.com/Unchained-Labs/soif) and shows the answer next to the
+dollars:
+
+```sh
+localflow water
+
+  271 L (range 23 L – 3133 L) of freshwater
+
+  claude-opus-5            271 L (range 23 L – 3131 L)
+  claude-opus-4-8          111 mL (range 9.27 mL – 1.3 L)
+```
+
+**localflow does no water arithmetic of its own**, and that is the point. soif's
+factors are versioned, sourced, and calibrated against Google's measured Gemini
+figures, Epoch AI's GPT-4o analysis and Mistral's Large 2 LCA. A second
+implementation living here would be wrong within a release and wrong silently —
+the same duplication this ecosystem has already paid for twice.
+
+Three things travel with the number:
+
+- **The range, always.** Published per-prompt figures span two orders of
+  magnitude (0.26 mL for a median Gemini prompt; 45 mL for a 400-token Mistral
+  Large 2 response). A bare midpoint would discard the only honest part.
+- **An assumed tier, flagged.** When soif has no factors for a model it picks a
+  capability tier and says so. Tier is worth ~30x across the range, so those
+  rows are drawn hollow and named — a number resting on a guess is a different
+  claim from one resting on published figures.
+- **Sessions with no recorded model, excluded and counted.** They never reach
+  soif at all; a placeholder handed over as a model name would come back with a
+  confident-looking estimate for work we cannot attribute to anything.
+
+No soif installed means no water section — not a section full of zeroes.
+`pip install soif-llm`.
+
 ## Every session, not just the recent ones
 
 The board keeps a bounded history on purpose; a machine with a year of sessions
