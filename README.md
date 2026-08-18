@@ -197,8 +197,14 @@ Three things travel with the number:
   soif at all; a placeholder handed over as a model name would come back with a
   confident-looking estimate for work we cannot attribute to anything.
 
-No soif installed means no water section — not a section full of zeroes.
-`pip install soif-llm`.
+No soif installed means no water section — not a section full of zeroes:
+
+```sh
+uv tool install git+https://github.com/Unchained-Labs/soif
+```
+
+(soif's README says `pip install soif-llm`; that distribution is not on PyPI yet,
+so the git URL is the one that works today.)
 
 ## Every session, not just the recent ones
 
