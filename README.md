@@ -369,6 +369,70 @@ have no such action — you cannot drag a session into *running*, because what
 makes a session run is having something to do — and the lane refuses in red and
 says why rather than snapping the card back.
 
+## Devices, and sessions that survive the train tunnel
+
+Claude Code dies when its ssh connection does. The kernel sends SIGHUP to the
+controlling terminal's process group on disconnect and the session goes with it,
+which is why a dropped connection has historically cost you the work rather than
+just the view of it. (Anthropic issue #49790.)
+
+The fix is tmux, which owns the session independently of any terminal, so the
+hangup lands on the client and the process keeps running. localflow can start
+those sessions for you on machines you have declared:
+
+```json
+// ~/.localflow/devices.json
+{
+  "devices": [
+    { "name": "spark", "host": "spark.example.ts.net", "cwd": "~/work" },
+    { "name": "nuc",   "host": "nuc.example.ts.net", "user": "you", "bin": "/opt/bin/claude" }
+  ]
+}
+```
+
+Then start the board with `--allow-remote`, which is a separate flag from
+`--allow-actions` on purpose: steering an agent on this machine and starting a
+process on a different one are not the same permission.
+
+Three rules this feature does not bend:
+
+**No credentials, ever.** Authentication is whatever your ssh already does --
+agent, key, certificate. ssh runs with `BatchMode=yes`, so a host that would
+prompt for a password fails and says so instead. A device carrying a `password`,
+`key` or `token` field is *refused outright*, not quietly loaded without it,
+because loading it would work against a key-based host and leave the secret
+sitting in a file in your home directory.
+
+**Devices are declared, never supplied.** The HTTP surface has no `host`
+parameter anywhere. Callers name a device and the host comes from the file. A
+board that accepted a hostname in a request body would be an ssh client with a
+web front end.
+
+**Prompts never touch a command line.** Whatever you type is base64-encoded,
+decoded into a file on the far side, and read back inside `"$(cat ...)"`, whose
+result the shell does not re-parse. The tests execute the generated script
+against a real shell with hostile prompts -- backticks, `$(...)`, embedded
+quotes and newlines -- and assert both that the bytes arrive intact and that
+nothing ran.
+
+Sessions localflow starts are prefixed `lf-`, and it will only list or kill that
+prefix, so your own tmux sessions on those machines are not its business.
+
+Attaching is a command you run yourself:
+
+```
+ssh -t spark.example.ts.net tmux attach -t lf-refactor
+```
+
+The board shows you that line rather than proxying a terminal. Holding a PTY
+open from a web server to another computer is a larger promise than this feature
+is making.
+
+**Requirements on the far side:** `tmux` and `claude` on PATH. The devices panel
+says which one is missing rather than failing opaquely. Note this only keeps the
+*process* alive -- Claude Code's Remote Control has a network timeout of its own,
+and nothing here changes that.
+
 ## Safety
 
 This process can start Claude Code sessions on your machine, and a page on the

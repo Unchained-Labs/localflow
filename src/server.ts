@@ -42,6 +42,8 @@ import { waterFor } from "./water.js";
 import { externalPricing, reloadPricing } from "./pricing.js";
 import { pricingPath, stalenessDays } from "./providers.js";
 import { sourcesPath } from "./agents/jsonl.js";
+import { findDevice, loadDevices, devicesPath } from "./devices.js";
+import { killSession, listSessions as listRemoteSessions, probeDevice, startSession } from "./remote.js";
 import { listSessions } from "./sessions.js";
 import { countTasks, createTask, readTasks, setTaskStatus } from "./tasks.js";
 import type { TaskStatus } from "./tasks.js";
@@ -58,6 +60,13 @@ export interface ServerOptions extends BoardOptions {
   pollMs?: number;
   /** Directory holding the built UI. */
   webRoot?: string;
+  /**
+   * Enables the remote-device routes. Deliberately separate from allowActions:
+   * "you may restart something on this box" and "you may start a process on a
+   * different computer" are not the same permission, and folding the second
+   * into the first would grant it to everyone who wanted the first.
+   */
+  allowRemote?: boolean;
 }
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
@@ -200,6 +209,8 @@ export class LocalflowServer {
         ok: this.lastError === null,
         error: this.lastError,
         actions: Boolean(this.opts.allowActions),
+        remote: Boolean(this.opts.allowRemote),
+        devicesPath: devicesPath(),
         sessions: this.latest?.totals.sessions ?? 0,
         otter: otterUrl(this.opts) ?? null,
         adapters: this.adapterStatus,
@@ -231,6 +242,8 @@ export class LocalflowServer {
       );
       return send(res, 200, { ...metrics, water });
     }
+
+    if (url.pathname === "/api/devices") return await this.devices(res);
 
     if (url.pathname === "/api/sessions") {
       const limit = Number(url.searchParams.get("limit") ?? 200);
@@ -391,9 +404,70 @@ export class LocalflowServer {
         return send(res, result.ok ? 200 : 400, { ...result, action: "task-status" });
       }
 
+      case "remote-start":
+      case "remote-kill": {
+        if (!this.opts.allowRemote) {
+          return send(res, 403, {
+            error:
+              "remote devices are disabled. Starting a process on another machine is a " +
+              "separate decision from steering this one: restart with --allow-remote.",
+          });
+        }
+        const { devices, error } = loadDevices();
+        if (error) return send(res, 400, { error });
+        // The device is resolved from the registry by name. The request never
+        // supplies a host, so an unknown name is simply not a device.
+        const device = findDevice(devices, body.device);
+        if (!device) {
+          return send(res, 404, {
+            error: `no device named ${JSON.stringify(body.device ?? null)} in ${devicesPath()}`,
+          });
+        }
+
+        if (verb === "remote-kill") {
+          const out = await killSession(device, String(body.session ?? ""));
+          return send(res, out.ok ? 200 : 400, out.ok ? { ok: true } : { error: out.error });
+        }
+
+        const out = await startSession(device, {
+          name: String(body.name ?? ""),
+          prompt: String(body.prompt ?? ""),
+          cwd: optional(body.cwd),
+        });
+        return send(res, out.ok ? 200 : 400, out.ok ? out.value : { error: out.error });
+      }
+
       default:
         return send(res, 404, { error: `no such action: ${verb}` });
     }
+  }
+
+  /**
+   * Every declared device, each with what it could tell us about itself.
+   *
+   * Probed concurrently and never fatally: a laptop that is asleep is the normal
+   * case, not an error, and one unreachable machine must not empty the panel.
+   */
+  private async devices(res: ServerResponse): Promise<void> {
+    if (!this.opts.allowRemote) {
+      return send(res, 200, { enabled: false, devices: [], path: devicesPath() });
+    }
+    const { devices, error } = loadDevices();
+    const rows = await Promise.all(
+      devices.map(async (d) => {
+        const [probe, sessions] = await Promise.all([probeDevice(d), listRemoteSessions(d)]);
+        return {
+          name: d.name,
+          host: d.host,
+          reachable: probe.ok,
+          detail: probe.ok ? "" : (probe.error ?? "unreachable"),
+          tmux: probe.value?.tmux ?? false,
+          claude: probe.value?.bin ?? false,
+          sessions: sessions.value ?? [],
+        };
+      }),
+    );
+    return send(res, 200, { enabled: true, devices: rows, path: devicesPath(), error: error ?? null });
   }
 
   private static(pathname: string, res: ServerResponse): void {
