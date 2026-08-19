@@ -1146,7 +1146,7 @@ async function renderSessions(query = ""): Promise<void> {
       r.name ?? r.sessionId.slice(0, 8),
       tilde(r.cwd),
       r.bytes ? `${(r.bytes / 1e6).toFixed(1)} MB` : "—",
-      age(Date.now() - r.updatedAt),
+      age(r.updatedAt),
     ]) {
       tr.append(el("td", { textContent: text }));
     }

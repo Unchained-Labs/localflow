@@ -9,8 +9,9 @@
 </div>
 
 <div align="center">
-  <img src="docs/assets/demo.gif" width="880" alt="The localflow dashboard: four lanes of live Claude Code sessions, the detail drawer, the observed fan-out graph, and the reroute and spawn dialogs">
-  <br><sub>The real dashboard, against a real machine. <a href="https://unchained-labs.github.io/localflow/">Full demo →</a></sub>
+  <img src="docs/assets/demo.gif" width="880" alt="The localflow dashboard: four lanes of live sessions, a card from another tool, the detail drawer, the observed fan-out graph, burn rate, the five-hour block, spend over time, the water estimate, and the devices panel">
+  <br><sub>The dashboard itself, driven by a real server against a machine built for the reel.
+  <a href="https://unchained-labs.github.io/localflow/">The full tour →</a> — it also covers reroute, spawn, and what the board refuses.</sub>
 </div>
 
 ---
@@ -509,6 +510,34 @@ JSON at all.
 
 The mark is generated, not drawn: `python3 tools/mkmark.py` computes the lane
 pitch from the grid so the gutters are equal by construction.
+
+### The demo reel
+
+```sh
+make demo          # rebuilds docs/assets/demo.{mp4,gif} and the stills
+```
+
+Four pieces, and the first one is the interesting one:
+
+- **`tools/fixture.mjs`** writes a machine — transcripts, a session registry,
+  another tool's sessions, three declared devices — into a directory, and prints
+  the environment that points localflow at it. Nothing is stubbed inside the
+  product: `CLAUDE_CONFIG_DIR`, `LOCALFLOW_SOURCES`, `LOCALFLOW_HOME` and a
+  `claude`/`ssh` pair on `PATH` are the whole of it.
+- **`tools/capture.mjs`** drives a real Chrome against a real server over the
+  DevTools Protocol, performs the interactions a person would, and saves a frame
+  plus the on-screen rectangle worth zooming into after each one.
+- **`tools/mkdemo.py`** composites those frames with captions. The MP4 is the
+  full tour; the GIF above is the subset that still reads at 640px, because it
+  has to load inside this README.
+- `make demo` runs all three on their own port and Chrome profile, so a
+  localflow you are already using is not disturbed.
+
+The reel used to be shot against the author's own laptop, which meant nobody
+else could rebuild it and every shipped feature made it staler. **The captions
+are claims about the fixture** — "ten agent calls in four groups" is true
+because `fixture.mjs` writes exactly that, so a number changed there is a
+caption to change here.
 
 ## Licence
 

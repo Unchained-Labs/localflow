@@ -2,19 +2,31 @@
 """Builds the localflow demo reel from captured dashboard screenshots.
 
 The first version of this demo was a terminal recording, which showed everything
-about localflow except the thing it is — a board. So the reel is now the real UI,
-captured from a real server against a real machine by `tools/capture.mjs`, cut
-together here with captions.
+about localflow except the thing it is — a board. So the reel is the real UI,
+captured from a real server by `tools/capture.mjs` against the machine
+`tools/fixture.mjs` writes, and cut together here with captions.
 
 Every frame is composited rather than screen-recorded, so the result is
 deterministic: same screenshots in, same video out, and a caption can be fixed
 without re-running the browser.
+
+**Two cuts, from one render.** The MP4 is the full tour. The GIF is the subset
+of steps marked `gif=True`, at half size and half the frame rate, because it has
+to load inside a README — and a GIF of the whole tour is a two-megabyte
+autoplaying wall. Anything the README drops is still one click away in the
+video, so the subset is chosen for what reads at 640px rather than for what
+matters least.
+
+**The captions are claims about the fixture.** "Ten agent calls in four groups"
+is true because tools/fixture.mjs writes exactly that. Change the fixture and
+the caption that reads it out has to change with it.
 
 Usage: mkdemo.py <frames-dir> <out-dir>
 """
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -35,13 +47,41 @@ FAINT = (90, 102, 115)     # --ul-faint
 ACCENT = (0, 212, 170)     # --ul-accent
 WARN = (232, 179, 57)      # --ul-warn
 
-FONT_DIR = pathlib.Path.home() / ".local/share/fonts"
-REG = FONT_DIR / "JetBrainsMonoNerdFont-Regular.ttf"
-BOLD = FONT_DIR / "JetBrainsMonoNerdFont-Bold.ttf"
+
+def font_file(*names: str) -> pathlib.Path:
+    """First of `names` that exists, searched where fonts actually live.
+
+    The old version hard-coded one path under ~/.local/share/fonts, so this tool
+    only ran on the machine it was written on — which is the same reason the
+    reel needed that machine's sessions. Fall back rather than fail: a caption in
+    DejaVu is a worse reel than one in JetBrains Mono, and no reel at all is
+    worse than both.
+    """
+    roots = [
+        pathlib.Path.home() / ".local/share/fonts",
+        pathlib.Path("/usr/local/share/fonts"),
+        pathlib.Path("/usr/share/fonts"),
+        pathlib.Path("/Library/Fonts"),
+        pathlib.Path.home() / "Library/Fonts",
+    ]
+    for name in names:
+        for root in roots:
+            if not root.exists():
+                continue
+            direct = root / name
+            if direct.exists():
+                return direct
+            hit = next(root.rglob(name), None)
+            if hit:
+                return hit
+    raise SystemExit(f"mkdemo: none of {', '.join(names)} found — install a mono font or edit font_file()")
+
+
+REG = font_file("JetBrainsMonoNerdFont-Regular.ttf", "JetBrainsMono-Regular.ttf", "DejaVuSansMono.ttf")
+BOLD = font_file("JetBrainsMonoNerdFont-Bold.ttf", "JetBrainsMono-Bold.ttf", "DejaVuSansMono-Bold.ttf")
 
 W, H = 1280, 800
 FPS = 20
-CAPTION_H = 96
 FADE = 0.3   # seconds of crossfade between steps
 
 f_cap = ImageFont.truetype(str(BOLD), 21)
@@ -87,10 +127,17 @@ def draw_caption(img: Image.Image, title: str, sub: str | None) -> None:
         y += 22
 
 
+# How far a crop may be blown up. A card is 380px wide and the frame is 1280, so
+# filling the width means 3.4x — which is a screenshot of text rendered at three
+# times its own resolution, and it looks it. Capped and centred instead: smaller
+# in frame, but the type stays type.
+MAX_ZOOM = 2.0
+
+
 def fit(src: Image.Image, box_h: int, crop: tuple[int, int, int, int] | None) -> Image.Image:
-    """Crop a region of the screenshot and scale it to fill the frame width."""
+    """Crop a region of the screenshot and scale it into the frame."""
     im = src.crop(crop) if crop else src
-    scale = W / im.width
+    scale = min(W / im.width, MAX_ZOOM)
     if im.height * scale > box_h:
         scale = box_h / im.height
     return im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))), Image.LANCZOS)
@@ -134,20 +181,14 @@ def lerp_box(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(4))
 
 
-def build(frames_dir: pathlib.Path, out: pathlib.Path) -> int:
-    entries = json.loads((frames_dir / "manifest.json").read_text())
-    src = {m["name"]: Image.open(frames_dir / m["file"]).convert("RGB") for m in entries}
+def steps_for(box) -> list[dict]:
+    """The reel, in order.
 
-    # Crops were measured in the browser by capture.mjs — getBoundingClientRect
-    # on the element that matters — so a dialog is framed exactly rather than
-    # guessed off the PNG, and it keeps working when the layout moves.
-    rects = {m["name"]: m["rect"] for m in entries if m.get("rect")}
-
-    def box(name):
-        r = rects.get(name)
-        return (r[0], r[1], r[0] + r[2], r[1] + r[3]) if r else None
-
-    steps: list[dict] = [
+    `gif` marks the steps the README's GIF keeps. The board, the money and the
+    four answers you cannot get anywhere else are in it; the dialogs and the
+    prose cards are the video's job.
+    """
+    return [
         {"card": [
             ("big", "localflow"),
             ("mid", ""),
@@ -155,35 +196,43 @@ def build(frames_dir: pathlib.Path, out: pathlib.Path) -> int:
             ("mid", "waiting for you, and you cannot see which."),
             ("small", ""),
             ("small", "A board for the Claude Code sessions already running on your machine."),
-        ], "hold": 3.0},
+        ], "hold": 3.0, "gif": True},
 
-        {"shot": "board", "hold": 4.2,
+        {"shot": "board", "hold": 3.8, "gif": True,
          "title": "Every session on this machine, on one board",
-         "sub": "Read from the registry and transcripts already on your disk. Nothing is sent anywhere."},
+         "sub": "Read from the registry and the transcripts already on your disk. Nothing is sent anywhere."},
 
-        {"shot": "totals", "crop": box("totals"), "hold": 3.4,
+        {"shot": "totals", "crop": box("totals"), "hold": 3.0, "gif": True,
          "title": "What all of it has cost you",
          "sub": "Priced from measured tokens — not reported by the provider, and not guessed."},
 
-        {"shot": "card-focus", "crop": box("card-focus"), "hold": 4.2,
+        {"shot": "card-focus", "crop": box("card-focus"), "hold": 3.6, "gif": True,
          "title": "Each card: model, tokens, cost, cache share",
          "sub": "The bar is the share served from cache. It is the single biggest lever on the bill."},
 
-        {"shot": "waiting", "crop": box("waiting"), "hold": 4.6,
-         "title": "Waiting on you",
-         "sub": "Idle with an empty queue — it wants an answer. A session blocked on a question is invisible from the terminal you are not looking at."},
+        {"shot": "sources", "crop": box("sources"), "hold": 4.2, "gif": True,
+         "title": "Other people's agents, on the same board",
+         "sub": "Codex and Gemini sessions, read through a shape you declared rather than one this repo guessed. "
+                "The model nobody supplied a rate for says cost unknown — never $0.00."},
 
-        {"shot": "drawer", "crop": box("drawer"), "hold": 4.4,
+        {"shot": "waiting", "crop": box("waiting"), "hold": 4.0, "gif": True,
+         "title": "Waiting on you",
+         "sub": "Idle with an empty queue — it wants an answer. A session blocked on a question is invisible "
+                "from the terminal you are not looking at."},
+
+        {"shot": "drawer", "crop": box("drawer"), "hold": 3.8, "gif": True,
          "title": "Open one: what it spent, what it called",
          "sub": "Tokens, cost, cache rate, the last prompt, and every tool it used."},
 
-        {"shot": "graph", "crop": box("graph"), "hold": 4.6,
+        {"shot": "graph", "crop": box("graph"), "hold": 4.2, "gif": True,
          "title": "And the fan-out it actually performed",
-         "sub": "Ten agent calls, none of them parallel. The transcript records that; nothing else shows it to you."},
+         "sub": "Ten agent calls in four groups. The widest ran five wide and two of its children came back "
+                "with an error. The transcript records that; nothing else shows it to you."},
 
-        {"shot": "actions", "crop": box("actions"), "hold": 4.4,
+        {"shot": "actions", "crop": box("actions"), "hold": 4.0,
          "title": "Reprompt, reroute, interrupt",
-         "sub": "And what it noticed about this run — three verifiers asking the same question, a fan-out where children failed, a session running cold on cache."},
+         "sub": "And what it noticed about this run — a fan-out whose children failed, and three verifiers "
+                "whose prompts are 82% alike, which is one verifier at three times the price."},
 
         {"card": [
             ("mid", "graphlint lints the graph you wrote."),
@@ -194,29 +243,79 @@ def build(frames_dir: pathlib.Path, out: pathlib.Path) -> int:
             ("small", ""),
             ("small", "Shape is measured. Whether a barrier was needed is graphlint's question —"),
             ("small", "and now it has real graphs to ask it about."),
-        ], "hold": 5.0},
+        ], "hold": 4.2},
 
-        {"shot": "reroute", "crop": box("reroute"), "hold": 4.4,
+        {"shot": "reroute", "crop": box("reroute"), "hold": 3.8,
          "title": "Reroute: same conversation, a different model",
          "sub": "Forks the session so the original is left exactly as it was."},
 
-        {"shot": "refuse", "crop": box("refuse"), "hold": 4.6,
+        {"shot": "refuse", "crop": box("refuse"), "hold": 4.0,
          "title": "A move with nothing behind it is refused",
-         "sub": "You cannot drag a session into running: what makes it run is having something to do. The lane says why, instead of snapping the card back."},
+         "sub": "You cannot drag a session into running: what makes it run is having something to do. "
+                "The lane says why, instead of snapping the card back."},
 
-        {"shot": "spawn", "crop": box("spawn"), "hold": 4.2,
+        {"shot": "spawn", "crop": box("spawn"), "hold": 3.6,
          "title": "Start a background agent from the board",
          "sub": "claude --bg, in a directory you allowed. It appears within one poll."},
+
+        # ---- the metrics tab, which is most of what this reel was missing ----
+        {"shot": "metrics", "crop": box("metrics"), "hold": 3.6, "gif": True,
+         "title": "Then the question a board of running agents is opened with",
+         "sub": "Sessions, tokens, spend, cache hit rate, tool errors. Sessions nobody could price are "
+                "counted beside the total rather than folded into it as zero."},
+
+        {"shot": "burn", "crop": box("burn"), "hold": 4.6, "gif": True,
+         "title": "How fast the money is going",
+         "sub": "Every rate is divided by the part of its window this board could actually see, never by the "
+                "window itself — and a window in which nothing could be priced reports unknown, not $0.00/h."},
+
+        {"shot": "block", "crop": box("block"), "hold": 4.8, "gif": True,
+         "title": "And the five-hour block it is going into",
+         "sub": "Usage limits reset on rolling five-hour blocks, so “spent today” is the wrong denominator — "
+                "midnight is not a thing the limit knows about. A projection needs a quarter-hour of block "
+                "behind it; under that there is only the reason there isn't one."},
+
+        {"shot": "spend", "crop": box("spend"), "hold": 4.4, "gif": True,
+         "title": "Spend over time, and where the tokens went",
+         "sub": "Hatched means work nobody could price: it happened, and no total above includes it. "
+                "A flat line through a period that actually cost something is the failure worth engineering against."},
+
+        {"shot": "bytool", "crop": box("bytool"), "hold": 3.8,
+         "title": "Which agent produced the work, and in which project",
+         "sub": "Six categorical hues, validated for colour-vision separation against these surfaces. "
+                "A seventh series is never a new hue — it folds into a labelled neutral."},
+
+        {"shot": "fanout", "crop": box("fanout"), "hold": 3.8,
+         "title": "How wide the parallelism actually got",
+         "sub": "Across every session on the board rather than one run. Red is the share that came back "
+                "with a tool error."},
+
+        {"shot": "water", "crop": box("water"), "hold": 4.8, "gif": True,
+         "title": "And what the answers cost in freshwater",
+         "sub": "The same token counts, handed to soif — localflow does no water arithmetic of its own. "
+                "The range never leaves the number, and a model soif had to assume a tier for is drawn hollow."},
+
+        {"shot": "archive", "crop": box("archive"), "hold": 3.4,
+         "title": "Every session, not just the recent ones",
+         "sub": "The board keeps a bounded history on purpose. “Show me everything I have ever run” is a "
+                "different question, and it gets its own answer."},
+
+        {"shot": "devices", "crop": box("devices"), "hold": 4.6, "gif": True,
+         "title": "Sessions that survive the train tunnel",
+         "sub": "Started over ssh inside tmux on machines you declared, so a dropped connection costs you a "
+                "reconnect rather than the session. No credentials are stored; the panel names the machine "
+                "missing tmux rather than failing opaquely."},
 
         {"card": [
             ("mid", "Watching is the default."),
             ("small", ""),
-            ("mid", "Actions are off until you arm them. The server binds to loopback"),
-            ("mid", "and checks Host and Origin — this process can start Claude"),
-            ("mid", "sessions, so a web page must not be able to reach it."),
+            ("mid", "Actions are off until you arm them, and starting work on another"),
+            ("mid", "machine is a second flag. The server binds to loopback and checks"),
+            ("mid", "Host and Origin — this process can start Claude sessions, so a"),
+            ("mid", "web page must not be able to reach it."),
             ("small", ""),
             ("small", "All four refusals are asserted in CI on every commit."),
-        ], "hold": 4.6},
+        ], "hold": 4.4},
 
         {"card": [
             ("accent", "npx localflow"),
@@ -224,89 +323,156 @@ def build(frames_dir: pathlib.Path, out: pathlib.Path) -> int:
             ("big", "unchained-labs.github.io/localflow"),
             ("small", ""),
             ("small", "Zero runtime deps. Reads only your own disk. MIT."),
-        ], "hold": 3.4},
+        ], "hold": 3.2, "gif": True},
     ]
 
-    frames = out / "frames"
-    if frames.exists():
-        shutil.rmtree(frames)
-    frames.mkdir(parents=True)
 
-    rendered: list[Image.Image] = []
-    for st in steps:
-        n = max(1, int(FPS * st["hold"]))
-        if "card" in st:
-            base = card_frame(st["card"])
-            rendered.extend([base] * n)
+def render(frames_dir: pathlib.Path) -> tuple[list[list[Image.Image]], list[bool]]:
+    """Render every step to a list of frames. Held frames share one image."""
+    entries = json.loads((frames_dir / "manifest.json").read_text())
+    src = {m["name"]: Image.open(frames_dir / m["file"]).convert("RGB") for m in entries}
+
+    # Crops were measured in the browser by capture.mjs — getBoundingClientRect
+    # on the element that matters — so a panel is framed exactly rather than
+    # guessed off the PNG, and it keeps working when the layout moves.
+    rects = {m["name"]: m["rect"] for m in entries if m.get("rect")}
+
+    def box(name):
+        r = rects.get(name)
+        return (r[0], r[1], r[0] + r[2], r[1] + r[3]) if r else None
+
+    chunks: list[list[Image.Image]] = []
+    in_gif: list[bool] = []
+    for st in steps_for(box):
+        shot = st.get("shot")
+        if shot and shot not in src:
+            # A beat whose screenshot the tour could not take — no devices
+            # declared, no soif installed — is dropped rather than filmed as an
+            # empty box. Said out loud, because a quietly shorter reel is a
+            # feature that silently stopped being demonstrated.
+            print(f"   (skipped: {shot} — no such frame in the capture)")
             continue
 
-        im = src[st["shot"]]
-        crop = st.get("crop")
-        to = st.get("to")
-        if to:
-            # A slow push, for the shots where the eye needs leading somewhere.
-            for i in range(n):
-                t = i / max(1, n - 1)
-                rendered.append(shot_frame(im, lerp_box(crop, to, t), st["title"], st.get("sub")))
-        else:
-            base = shot_frame(im, crop, st["title"], st.get("sub"))
-            rendered.extend([base] * n)
-
-    # Crossfade the joins. Held frames are the same object, so this only does
-    # real work at the boundaries.
-    fade = int(FPS * FADE)
-    out_frames: list[Image.Image] = []
-    i = 0
-    for si, st in enumerate(steps):
         n = max(1, int(FPS * st["hold"]))
-        chunk = rendered[i : i + n]
-        i += n
-        if si > 0 and fade:
-            prev = out_frames[-1]
+        if "card" in st:
+            chunks.append([card_frame(st["card"])] * n)
+        else:
+            im = src[shot]
+            crop = st.get("crop")
+            to = st.get("to")
+            if to:
+                # A slow push, for the shots where the eye needs leading somewhere.
+                chunks.append([
+                    shot_frame(im, lerp_box(crop, to, i / max(1, n - 1)), st["title"], st.get("sub"))
+                    for i in range(n)
+                ])
+            else:
+                chunks.append([shot_frame(im, crop, st["title"], st.get("sub"))] * n)
+        in_gif.append(bool(st.get("gif")))
+
+    return chunks, in_gif
+
+
+def assemble(chunks: list[list[Image.Image]]) -> list[Image.Image]:
+    """Concatenate chunks, crossfading the joins.
+
+    Held frames are the same object, so this only does real work at the
+    boundaries — a two-minute reel is a few dozen distinct images.
+    """
+    fade = int(FPS * FADE)
+    out: list[Image.Image] = []
+    for i, chunk in enumerate(chunks):
+        if i and fade:
+            prev = out[-1]
             for k in range(fade):
-                a = k / fade
-                out_frames.append(Image.blend(prev, chunk[0], a))
-        out_frames.extend(chunk)
-
-    for k, img in enumerate(out_frames, 1):
-        img.save(frames / f"f{k:05d}.png")
-    return len(out_frames)
+                out.append(Image.blend(prev, chunk[0], k / fade))
+        out.extend(chunk)
+    return out
 
 
-def encode(out: pathlib.Path, name: str, n: int) -> None:
-    pat = out / "frames" / "f%05d.png"
+def write_frames(frames: list[Image.Image], into: pathlib.Path, half: bool = False) -> int:
+    if into.exists():
+        shutil.rmtree(into)
+    into.mkdir(parents=True)
+    for k, img in enumerate(frames, 1):
+        if half:
+            img = img.resize((W // 2, H // 2), Image.LANCZOS)
+        img.save(into / f"f{k:05d}.png")
+    return len(frames)
+
+
+def ffmpeg() -> str:
+    """ffmpeg, wherever it is. Named rather than assumed, so the failure is clear."""
+    found = os.environ.get("FFMPEG") or shutil.which("ffmpeg")
+    if not found:
+        raise SystemExit("mkdemo: no ffmpeg on PATH — set FFMPEG=/path/to/ffmpeg")
+    return found
+
+
+def run(*args: str) -> None:
+    subprocess.run([ffmpeg(), "-y", "-loglevel", "error", *args], check=True)
+
+
+def encode_mp4(out: pathlib.Path, name: str, frames: pathlib.Path, n: int) -> None:
     mp4 = out / f"{name}.mp4"
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS), "-i", str(pat),
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "slow", "-crf", "21",
-         "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-movflags", "+faststart", str(mp4)],
-        check=True,
-    )
-    # Two-pass GIF: a per-clip palette is the difference between crisp UI text
-    # and dithered mush. Half size and half the frame rate — this reel is mostly
-    # held frames, so dropping to 10fps costs nothing visible and halves a file
-    # that has to load inside a README.
+    run("-framerate", str(FPS), "-i", str(frames / "f%05d.png"),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "slow", "-crf", "21",
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-movflags", "+faststart", str(mp4))
+    print(f"   {name}.mp4  {mp4.stat().st_size // 1024}KB   ({n} frames, {n / FPS:.1f}s)")
+
+
+def encode_gif(out: pathlib.Path, name: str, frames: pathlib.Path, n: int) -> None:
+    """Two-pass GIF.
+
+    A per-clip palette is the difference between crisp UI text and dithered
+    mush. The frames are already half size, and half the frame rate costs
+    nothing visible on a reel that is mostly held frames — it halves a file that
+    has to load inside a README.
+    """
     pal = out / "palette.png"
-    scale = "fps=10,scale=iw/2:ih/2:flags=lanczos"
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS), "-i", str(pat),
-         "-vf", f"{scale},palettegen=max_colors=128:stats_mode=diff", str(pal)],
-        check=True,
-    )
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS), "-i", str(pat), "-i", str(pal),
-         "-lavfi", f"{scale}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle",
-         "-loop", "0", str(out / f"{name}.gif")],
-        check=True,
-    )
+    gif = out / f"{name}.gif"
+    run("-framerate", str(FPS // 2), "-i", str(frames / "f%05d.png"),
+        "-vf", "palettegen=max_colors=128:stats_mode=diff", str(pal))
+    run("-framerate", str(FPS // 2), "-i", str(frames / "f%05d.png"), "-i", str(pal),
+        "-lavfi", "[0:v][1:v]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle",
+        "-loop", "0", str(gif))
     pal.unlink(missing_ok=True)
-    shutil.rmtree(out / "frames")
-    print(f"   {name}.mp4  {mp4.stat().st_size // 1024}KB")
-    print(f"   {name}.gif  {(out / f'{name}.gif').stat().st_size // 1024}KB   ({n} frames, {n / FPS:.1f}s)")
+    print(f"   {name}.gif  {gif.stat().st_size // 1024}KB   ({n} frames, {n / (FPS // 2):.1f}s)")
+
+
+def poster(frames_dir: pathlib.Path, out: pathlib.Path, name: str) -> None:
+    """The still behind the video before it plays. The board, not the title card.
+
+    A poster is the frame most people will see for longest — on a slow
+    connection it may be the only one — so it shows the product rather than the
+    word for it.
+    """
+    entries = json.loads((frames_dir / "manifest.json").read_text())
+    board = next((m for m in entries if m["name"] == "board"), entries[0])
+    img = Image.open(frames_dir / board["file"]).convert("RGB")
+    frame = shot_frame(img, None, "Every session on this machine, on one board",
+                       "Read from the registry and the transcripts already on your disk. Nothing is sent anywhere.")
+    path = out / f"{name}-poster.jpg"
+    frame.save(path, quality=88, optimize=True)
+    print(f"   {name}-poster.jpg  {path.stat().st_size // 1024}KB")
 
 
 if __name__ == "__main__":
     frames_dir = pathlib.Path(sys.argv[1])
     out = pathlib.Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
-    encode(out, "localflow", build(frames_dir, out))
+
+    chunks, in_gif = render(frames_dir)
+
+    full = assemble(chunks)
+    n = write_frames(full, out / "frames")
+    encode_mp4(out, "localflow", out / "frames", n)
+
+    # Half the frame rate for the GIF: keep every other frame of the same cut.
+    short = assemble([c for c, keep in zip(chunks, in_gif) if keep])[::2]
+    gn = write_frames(short, out / "gframes", half=True)
+    encode_gif(out, "localflow", out / "gframes", gn)
+
+    poster(frames_dir, out, "localflow")
+    shutil.rmtree(out / "frames")
+    shutil.rmtree(out / "gframes")

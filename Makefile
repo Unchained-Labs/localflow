@@ -28,7 +28,7 @@ ARGS += --allow-actions
 ARGS += $(foreach r,$(ROOTS),--allow-root $(r))
 endif
 
-.PHONY: up down restart logs status build install
+.PHONY: up down restart logs status build install demo
 
 install:
 	pnpm install --frozen-lockfile
@@ -74,3 +74,58 @@ status:
 	else \
 	  echo "localflow: not running"; \
 	fi
+
+# ---- the demo reel -----------------------------------------------------------
+#
+# Rebuilds docs/assets/demo.{mp4,gif,-poster.jpg} and the stills beside them, end
+# to end: a synthetic machine (tools/fixture.mjs), a real server reading it, a
+# real browser driving the board (tools/capture.mjs), and the compositor that
+# cuts the frames together with captions (tools/mkdemo.py).
+#
+#   make demo               rebuild the reel into docs/assets
+#   make demo DEMO_KEEP=1   leave .demo/ behind — the fixture, the frames, the log
+#
+# Runs on its own port and its own Chrome profile, so a localflow you are
+# already using on 7317 is not disturbed.
+#
+# Needs chromium (or Chrome), ffmpeg, and python3 with Pillow. soif is optional:
+# with it the reel gets its water beat, without it that beat drops itself and
+# says so.
+DEMO_DIR  ?= $(CURDIR)/.demo
+DEMO_PORT ?= 7318
+DEMO_CDP  ?= 9223
+CHROME    ?= $(shell command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || command -v google-chrome 2>/dev/null)
+
+# The working directories the fixture's sessions claim to be in. Actions are
+# armed for the reel — the New task and Reroute dialogs are two of its beats —
+# and the spawn dialog will not open for a directory outside the allowed roots.
+DEMO_ROOT ?= /home/w
+
+demo: build
+	@if [ -z "$(CHROME)" ]; then echo "make demo: no chromium on PATH — set CHROME=/path/to/chrome"; exit 1; fi
+	@rm -rf $(DEMO_DIR) && mkdir -p $(DEMO_DIR)
+	@node tools/fixture.mjs $(DEMO_DIR)/machine
+	@# One shell for the whole shoot, so the trap can take the server and the
+	@# browser down again when a beat fails. Two backgrounded processes left
+	@# running after a failed capture is a port conflict on the next attempt,
+	@# which reads as a second, unrelated bug.
+	@set -e; \
+	  . $(DEMO_DIR)/machine/env.sh; \
+	  node dist/src/cli.js serve --port $(DEMO_PORT) --host 127.0.0.1 \
+	    --allow-actions --allow-remote --allow-root $(DEMO_ROOT) \
+	    >$(DEMO_DIR)/server.log 2>&1 & server=$$!; \
+	  "$(CHROME)" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
+	    --force-device-scale-factor=1 --window-size=1440,900 \
+	    --remote-debugging-port=$(DEMO_CDP) --user-data-dir=$(DEMO_DIR)/chrome \
+	    about:blank >$(DEMO_DIR)/chrome.log 2>&1 & chrome=$$!; \
+	  trap 'kill $$server $$chrome 2>/dev/null || true' EXIT; \
+	  sleep 5; \
+	  node tools/capture.mjs $(DEMO_DIR)/frames --port $(DEMO_PORT) --cdp $(DEMO_CDP); \
+	  python3 tools/mkdemo.py $(DEMO_DIR)/frames $(DEMO_DIR)/out
+	cp $(DEMO_DIR)/out/localflow.mp4 docs/assets/demo.mp4
+	cp $(DEMO_DIR)/out/localflow.gif docs/assets/demo.gif
+	cp $(DEMO_DIR)/out/localflow-poster.jpg docs/assets/demo-poster.jpg
+	cp $(DEMO_DIR)/frames/*-board.png docs/assets/board.png
+	cp $(DEMO_DIR)/frames/*-graph.png docs/assets/drawer.png
+	@[ -n "$(DEMO_KEEP)" ] || rm -rf $(DEMO_DIR)
+	@echo "demo: docs/assets updated"
