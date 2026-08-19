@@ -15,8 +15,14 @@
  *
  * **Buckets that no session landed in are still emitted.** A day with no work
  * is a real day at zero, and dropping it makes a gap look like a plateau.
+ *
+ * Rates and the five-hour limit window are the same derivation from the same
+ * cards, but they answer "how fast" rather than "how much" and carry their own
+ * refusals, so they live in `burn.ts` and arrive here already computed.
  */
-import { cacheWriteTotal } from "./types.js";
+import { blocksOf, burnRates } from "./burn.js";
+import type { Block, BurnWindow } from "./burn.js";
+import { addUsage, cacheWriteTotal, zeroUsage } from "./types.js";
 import type { BoardSummary, Lane, Task, Usage } from "./types.js";
 
 export interface Bucket {
@@ -60,19 +66,12 @@ export interface Metrics {
   fanoutWidths: { width: number; count: number; failed: number }[];
   /** Most-used tools, descending. */
   tools: { name: string; calls: number }[];
-}
-
-function zeroUsage(): Usage {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, thinking: 0 };
-}
-
-function addUsage(into: Usage, from: Usage): void {
-  into.input += from.input;
-  into.output += from.output;
-  into.cacheRead += from.cacheRead;
-  into.cacheWrite5m += from.cacheWrite5m;
-  into.cacheWrite1h += from.cacheWrite1h;
-  into.thinking += from.thinking;
+  /** Rolling spend and token rates, narrowest window first. See `burn.ts`. */
+  burn: BurnWindow[];
+  /** Anthropic's five-hour usage blocks, oldest first, most recent 24. */
+  blocks: Block[];
+  /** The block `generatedAt` falls inside, or null when no block is open. */
+  currentBlock: Block | null;
 }
 
 /**
@@ -186,6 +185,11 @@ export function computeMetrics(board: BoardSummary, now = Date.now()): Metrics {
   const allIn = cachedIn + totals.usage.input + cacheWriteTotal(totals.usage);
   totals.cacheHitRate = allIn > 0 ? cachedIn / allIn : null;
 
+  // Both are derived from the same cards as everything above, and both live in
+  // burn.ts because they answer a different question — not "what has this cost"
+  // but "how fast, and how much of the current limit window is left".
+  const blocks = blocksOf(tasks, now);
+
   return {
     generatedAt: now,
     bucketMs,
@@ -202,5 +206,8 @@ export function computeMetrics(board: BoardSummary, now = Date.now()): Metrics {
       .map(([name, calls]) => ({ name, calls }))
       .sort((a, b) => b.calls - a.calls)
       .slice(0, 12),
+    burn: burnRates(tasks, now),
+    blocks,
+    currentBlock: blocks.find((b) => b.active) ?? null,
   };
 }
