@@ -324,3 +324,21 @@ body[data-view="sessions"] .sessions { display: block; }
   background: var(--ul-bg-inset); border: 1px solid var(--ul-line);
   border-radius: var(--ul-radius-sm); color: var(--ul-body);
   font-family: var(--ul-font-mono); font-size: var(--ul-text-xs); }
+
+/* ---- devices ---------------------------------------------------------------
+ * Reachability is a dot plus words. The dot is the quick scan; the words are
+ * what someone acts on, because "off" and "reachable but tmux is missing" need
+ * different fixes and a colour cannot say which.
+ */
+.dev-row { padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.dev-row:last-child { border-bottom: 0; }
+.dev-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.dev-dot { width: .55rem; height: .55rem; border-radius: 50%; flex: 0 0 auto; align-self: center; }
+.dev-dot.ok { background: var(--ok, #199e70); }
+.dev-dot.off { background: var(--muted, #6b7280); }
+.dev-host { color: var(--fg-muted); font-size: .85em; }
+.dev-why { color: var(--fg-muted); font-size: .85em; font-style: italic; }
+.dev-sessions { list-style: none; margin: .4rem 0 0; padding: 0 0 0 1.05rem; }
+.dev-sessions li { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .18rem 0; }
+.dev-attach { font-size: .8em; color: var(--fg-muted); background: var(--surface-2, transparent);
+              padding: .1rem .35rem; border-radius: 3px; user-select: all; }

@@ -29,6 +29,10 @@ OPTIONS
   --port N                 default 7317
   --host ADDR              default 127.0.0.1. Anything else exposes this to your network.
   --allow-actions          permit spawn / reprompt / reroute / stop. Off by default.
+  --allow-remote           permit starting Claude on a machine listed in
+                           ~/.localflow/devices.json, over ssh, inside tmux so a
+                           dropped connection cannot kill it. Off by default, and
+                           separate from --allow-actions on purpose.
   --allow-root PATH        restrict spawn to a directory (repeatable)
   --history N              ended sessions to keep on the board (default 10)
   --tokens                 also write per-call token counts from calibrate. Off by
@@ -252,6 +256,7 @@ async function main(): Promise<number> {
     port: Number(flag(argv, "--port") ?? 7317),
     host,
     allowActions: argv.includes("--allow-actions"),
+    allowRemote: argv.includes("--allow-remote"),
     allowedRoots: flags(argv, "--allow-root"),
     pollMs: Number(flag(argv, "--poll") ?? 2000),
   });

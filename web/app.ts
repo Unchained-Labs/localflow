@@ -685,6 +685,11 @@ async function init(): Promise<void> {
   wireDialog();
   wireDnD();
   connect();
+  // Devices are polled, not streamed: reaching six machines over ssh to redraw a
+  // panel every two seconds would cost more than the panel is worth. Once at
+  // boot, then on a slow timer.
+  void renderDevices();
+  setInterval(() => void renderDevices(), 30_000);
 }
 
 void init();
@@ -1179,4 +1184,115 @@ function wireViews(): void {
     clearTimeout(timer);
     timer = setTimeout(() => void renderSessions((e.target as HTMLInputElement).value), 200);
   });
+}
+
+// ---- devices ----------------------------------------------------------------
+//
+// The panel is deliberately quiet when the feature is off. A machine that never
+// registered a device should not be told about a capability it is not using, and
+// a board full of "remote disabled" banners teaches its reader to skip banners.
+
+interface DeviceSession {
+  name: string;
+  createdAt: number | null;
+  attached: boolean;
+  windows: number;
+}
+
+interface DeviceRow {
+  name: string;
+  host: string;
+  reachable: boolean;
+  detail: string;
+  tmux: boolean;
+  claude: boolean;
+  sessions: DeviceSession[];
+}
+
+async function renderDevices(): Promise<void> {
+  const section = $("#devices");
+  const body = $("#dev-body");
+  let data: { enabled: boolean; devices: DeviceRow[]; path: string; error: string | null };
+  try {
+    data = await (await fetch("/api/devices")).json();
+  } catch {
+    section.hidden = true;
+    return;
+  }
+
+  // Off, or on with nothing declared: both mean "this box does not do remote",
+  // and neither is a problem to report.
+  if (!data.enabled || (data.devices.length === 0 && !data.error)) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  body.textContent = "";
+
+  if (data.error) {
+    const warn = el("p", { className: "degraded" });
+    warn.textContent = data.error;
+    body.append(warn);
+  }
+
+  for (const d of data.devices) {
+    const row = el("div", { className: "dev-row" });
+    const head = el("div", { className: "dev-head" });
+
+    const dot = el("span", { className: `dev-dot ${d.reachable ? "ok" : "off"}` });
+    const name = el("strong");
+    name.textContent = d.name;
+    const host = el("span", { className: "dev-host" });
+    host.textContent = d.host;
+    head.append(dot, name, host);
+
+    if (!d.reachable) {
+      // Asleep is the ordinary state of a laptop. Say what ssh said and move on.
+      const why = el("span", { className: "dev-why" });
+      why.textContent = d.detail || "unreachable";
+      head.append(why);
+    } else if (!d.tmux || !d.claude) {
+      // Reachable but not equipped: name the missing piece, since the fix is a
+      // one-line install on that machine rather than anything to do here.
+      const missing = [!d.tmux && "tmux", !d.claude && "claude"].filter(Boolean).join(" and ");
+      const why = el("span", { className: "dev-why" });
+      why.textContent = `reachable, but ${missing} not on PATH`;
+      head.append(why);
+    }
+    row.append(head);
+
+    if (d.sessions.length) {
+      const list = el("ul", { className: "dev-sessions" });
+      for (const s of d.sessions) {
+        const li = el("li");
+        const label = el("span");
+        label.textContent = s.createdAt ? `${s.name} — started ${age(s.createdAt)} ago` : s.name;
+        li.append(label);
+
+        // The attach command is text to copy, not a button. Handing someone a
+        // command they run in their own terminal keeps the tty on their side.
+        const cmd = el("code", { className: "dev-attach" });
+        cmd.textContent = `ssh -t ${d.host} tmux attach -t ${s.name}`;
+        li.append(cmd);
+
+        const kill = el("button", { className: "btn btn-quiet" });
+        kill.textContent = "kill";
+        kill.addEventListener("click", async () => {
+          kill.disabled = true;
+          const reply = await post("/api/actions/remote-kill", { device: d.name, session: s.name });
+          toast(reply.error ?? `${s.name} stopped`, reply.error ? "err" : "ok");
+          await renderDevices();
+        });
+        li.append(kill);
+        list.append(li);
+      }
+      row.append(list);
+    } else if (d.reachable) {
+      const none = el("p", { className: "blurb" });
+      none.textContent = "no sessions started from here";
+      row.append(none);
+    }
+
+    body.append(row);
+  }
 }

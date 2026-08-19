@@ -46,6 +46,19 @@
   </div>
 </section>
 
+<section id="devices" class="sessions" aria-label="Registered machines">
+  <div class="panel">
+    <h3>Devices</h3>
+    <p class="blurb">
+      Machines declared in <code>~/.localflow/devices.json</code>. Sessions started here run
+      inside tmux on the far side, so a dropped connection costs you a reconnect rather than
+      the session. Attaching is a command you run yourself — this board starts and stops work,
+      it does not hold a terminal open to another computer.
+    </p>
+    <div id="dev-body"></div>
+  </div>
+</section>
+
 <p class="degraded" id="degraded" hidden></p>
 
 <footer class="foot">
