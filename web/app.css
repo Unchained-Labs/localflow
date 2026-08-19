@@ -274,8 +274,16 @@ body[data-view="sessions"] .sessions { display: block; }
 .panel .blurb { margin: 0 0 var(--ul-space-3); font-size: var(--ul-text-xs); color: var(--ul-muted); }
 .panel-grid { display: grid; gap: var(--ul-space-3);
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+/* A panel that is a row of stat tiles reads badly in a 320px column — the tiles
+   wrap to one per line and the row stops being a row. These take the full grid. */
+.panel-wide { grid-column: 1 / -1; }
 
 .chart { width: 100%; height: auto; display: block; }
+/* The viewBox is only as wide as the series is long, and the charts stretch to
+   fill (`preserveAspectRatio="none"`), so a series of five bars in a wide panel
+   scales to several hundred pixels tall. Height is a property of the chart, not
+   of the browser window. */
+.chart-time, .chart-hist { max-height: 200px; }
 .chart-axis { fill: var(--ul-faint); font-size: 10px; font-family: var(--ul-font-mono); }
 .chart-rows { display: flex; flex-direction: column; gap: 6px; }
 .chart-row { display: grid; grid-template-columns: 10px minmax(90px, 1fr) 2fr auto;

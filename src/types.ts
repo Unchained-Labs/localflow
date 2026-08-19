@@ -56,6 +56,40 @@ export function cacheWriteTotal(u: Usage): number {
 }
 
 /**
+ * A fresh zero total.
+ *
+ * Deliberately a function rather than `ZERO_USAGE`: every caller here is an
+ * accumulator that mutates what it is given, and a shared constant handed to
+ * two of them becomes a bug that surfaces in the third.
+ */
+export function zeroUsage(): Usage {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, thinking: 0 };
+}
+
+/** Accumulate `from` into `into`. */
+export function addUsage(into: Usage, from: Usage): void {
+  into.input += from.input;
+  into.output += from.output;
+  into.cacheRead += from.cacheRead;
+  into.cacheWrite5m += from.cacheWrite5m;
+  into.cacheWrite1h += from.cacheWrite1h;
+  into.thinking += from.thinking;
+}
+
+/**
+ * Every token that moved, for throughput.
+ *
+ * `thinking` is excluded on purpose: it is a subset of `output`, not a sixth
+ * bucket beside it — `pricing.ts` bills input, output and the two cache lines
+ * and never touches it. Adding it here would inflate a token rate by however
+ * much the model thought, which is precisely the sessions you most want to
+ * measure honestly.
+ */
+export function totalTokens(u: Usage): number {
+  return u.input + u.output + u.cacheRead + cacheWriteTotal(u);
+}
+
+/**
  * One observed parallel fan-out.
  *
  * Claude Code runs the `Agent` tool calls that share an assistant message

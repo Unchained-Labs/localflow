@@ -24,6 +24,8 @@ export { resolvePrice, reloadPricing, externalPricing } from "./pricing.js";
 export type { PriceOrigin, PricedModel } from "./pricing.js";
 export { isLocalModel, loadExternalPricing, pricingPath, stalenessDays, LOCAL_REASON } from "./providers.js";
 export { bucketWidth, computeMetrics } from "./metrics.js";
+export { BLOCK_MS, BURN_WINDOWS, blocksOf, burnOver, burnRates } from "./burn.js";
+export type { Block, BurnWindow } from "./burn.js";
 export { humanize as humanizeWater, probeSoif, waterFor } from "./water.js";
 export type { ModelUsage, Triple, WaterOptions, WaterReport, WaterSlice } from "./water.js";
 export type { Bucket, Metrics, Slice } from "./metrics.js";

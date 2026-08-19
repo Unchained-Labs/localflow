@@ -162,6 +162,39 @@ Six categorical hues, validated for colour-vision separation and contrast
 against this app's own surfaces. A seventh series is never a new hue — it folds
 into a labelled neutral.
 
+### Burn rate and the five-hour block
+
+```sh
+localflow metrics | jq '.burn, .currentBlock'
+```
+
+Anthropic's usage limits reset on rolling **five-hour blocks**, so "spent today"
+is the wrong denominator — midnight is not a thing the limit knows about. A
+block opens with the first session after the previous one closed and its start
+is floored to the hour, which is upstream's rule and not a rounding
+convenience: sessions at 09:30 and 12:30 are one block starting 09:00, where
+fixed five-hour slabs cut from the epoch would report two. The board shows what
+the current block has cost, how long until it resets, and where it lands if you
+keep going.
+
+Beside it, spend and tokens per hour over the last hour and the last 24. A rate
+is the only figure here that is an extrapolation rather than a sum, so each one
+carries what it was extrapolated from:
+
+- **The denominator is what the board could see, not the window.** Three
+  minutes of history is three minutes, and the tile says so rather than quietly
+  presenting `$3` as `$3/h`.
+- **Unpriced work has no rate at all.** A window in which nothing could be
+  priced reports `unknown`, never `$0.00/h`; a partly-priced one is prefixed
+  `≥`, because it is a floor. Token rates survive either way — tokens are
+  counted, not looked up.
+- **A projection needs a quarter-hour of block behind it.** Under that, there
+  is no projected figure, only the reason there isn't one.
+- **A session is billed to its last activity**, since a card carries one
+  cumulative total and one timestamp rather than a spend curve. A nine-hour
+  session therefore lands entirely in the window it last touched; those are
+  counted and labelled `bunched` instead of being smoothed over.
+
 ## Water
 
 Every answer evaporates real freshwater — cooling towers on-site, power plants

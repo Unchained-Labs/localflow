@@ -710,6 +710,20 @@ interface WaterPayload {
   assumedModels: string[];
 }
 
+interface BurnWindow {
+  windowMs: number; from: number; to: number; sessions: number; usage: Usage;
+  costUsd: number | null; unpriced: number; straddling: number; sampleMs: number;
+  costPerHour: number | null; tokensPerHour: number | null;
+  costIsFloor: boolean; thin: boolean; note: string;
+}
+
+interface Block {
+  startedAt: number; endsAt: number; active: boolean; sessions: number; usage: Usage;
+  costUsd: number | null; unpriced: number; straddling: number;
+  costIsFloor: boolean; remainingMs: number;
+  projectedCostUsd: number | null; projectedTokens: number | null; note: string;
+}
+
 interface MetricsPayload {
   buckets: { at: number; sessions: number; costUsd: number; unpriced: number; usage: Usage }[];
   bucketMs: number;
@@ -722,6 +736,9 @@ interface MetricsPayload {
   };
   fanoutWidths: { width: number; count: number; failed: number }[];
   tools: { name: string; calls: number }[];
+  burn: BurnWindow[];
+  blocks: Block[];
+  currentBlock: Block | null;
   water?: WaterPayload;
 }
 
@@ -751,12 +768,149 @@ function legend(keys: string[]): HTMLElement {
   return box;
 }
 
+/** A duration ahead of us. `age` reads backwards from now; this one does not. */
+function left(ms: number): string {
+  if (ms <= 0) return "now";
+  const m = Math.round(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Wall clock, local — the block boundary is something you look at a clock for. */
+function clock(at: number): string {
+  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Money that may be a lower bound.
+ *
+ * The `≥` is the whole point: a spend figure with unpriced work behind it is a
+ * floor, and a dashboard that renders it as a total is under-reporting with a
+ * straight face. Same rule the hatch on the bars follows, in one character.
+ */
+function floorMoney(usd: number | null, isFloor: boolean): string {
+  if (usd === null) return "unknown";
+  return isFloor ? `≥ ${money(usd)}` : money(usd);
+}
+
 function bucketLabel(at: number, width: number): string {
   const d = new Date(at);
   const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return width < 24 * 3600_000
     ? `${day} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`
     : day;
+}
+
+/**
+ * How fast it is going.
+ *
+ * Rates are the one metric here that is an extrapolation rather than a sum, so
+ * every tile carries the sample it was computed from. `unknown` is a real
+ * answer and appears whenever the server refused to state a rate — a burn rate
+ * of `$0.00/h` for an hour of work nobody could price would be the confident
+ * under-report this board exists not to produce.
+ */
+function burnPanel(m: MetricsPayload): HTMLElement {
+  const body = document.createElement("div");
+  const row = el("div", { className: "stat-row" });
+  for (const w of m.burn) {
+    const label = w.windowMs <= 3600_000 ? "Last hour" : `Last ${Math.round(w.windowMs / 3600_000)}h`;
+    const note = [
+      w.tokensPerHour === null ? null : `${tokens(Math.round(w.tokensPerHour))} tokens/h`,
+      `${w.sessions} session${w.sessions === 1 ? "" : "s"}`,
+      w.thin ? "thin sample" : null,
+      w.straddling ? "bunched" : null,
+    ].filter((x): x is string => x !== null);
+    row.append(
+      statTile(
+        label,
+        w.costPerHour === null ? "unknown" : `${floorMoney(w.costPerHour, w.costIsFloor)}/h`,
+        note.join(" · "),
+      ),
+    );
+  }
+  body.append(row);
+  // The caveats come from the server verbatim rather than being re-derived
+  // here, so the CLI and the board cannot end up disagreeing about them.
+  for (const w of m.burn) {
+    if (!w.note) continue;
+    const label = w.windowMs <= 3600_000 ? "Last hour" : `Last ${Math.round(w.windowMs / 3600_000)}h`;
+    body.append(el("p", { className: "blurb", textContent: `${label}: ${w.note}` }));
+  }
+  const panelEl = panel(
+    "Burn rate",
+    "Spend and tokens per hour, divided by the part of each window this board could actually see — never by the window itself. Ended sessions age off the board, so a long window is a floor.",
+    body,
+  );
+  panelEl.classList.add("panel-wide");
+  return panelEl;
+}
+
+/**
+ * The five-hour block, which is the window the limit actually resets on.
+ *
+ * "Spent today" is the wrong denominator — the limit does not care what
+ * midnight is. What matters is how much of the block is gone, what went into
+ * it, and whether continuing at this rate lands past the end of it.
+ */
+function blockPanel(m: MetricsPayload): HTMLElement {
+  const body = document.createElement("div");
+  const cur = m.currentBlock;
+
+  if (!cur) {
+    const last = m.blocks.at(-1);
+    body.append(
+      el("p", {
+        className: "blurb",
+        textContent: last
+          ? `No block is open — the last one reset ${age(last.endsAt)} ago. The next session starts a new one.`
+          : "Nothing has run yet, so no block has opened.",
+      }),
+    );
+  } else {
+    const row = el("div", { className: "stat-row" });
+    row.append(
+      statTile(
+        "Spent this block",
+        floorMoney(cur.costUsd, cur.costIsFloor),
+        `${cur.sessions} session${cur.sessions === 1 ? "" : "s"} since ${clock(cur.startedAt)}`,
+      ),
+      statTile("Resets in", left(cur.remainingMs), `at ${clock(cur.endsAt)}`),
+      statTile(
+        "Projected by reset",
+        cur.projectedCostUsd === null ? "not yet" : floorMoney(cur.projectedCostUsd, cur.costIsFloor),
+        cur.projectedTokens === null
+          ? "too early in the block to project"
+          : `${tokens(Math.round(cur.projectedTokens))} tokens at this rate`,
+      ),
+    );
+    body.append(row);
+    if (cur.note) body.append(el("p", { className: "blurb", textContent: cur.note }));
+  }
+
+  if (m.blocks.length) {
+    body.append(
+      timeBars(
+        m.blocks.map((b) => ({
+          at: b.startedAt,
+          value: b.costUsd ?? 0,
+          // Same hatch convention as the spend chart: sized to be visible, never
+          // a claim about what the unpriced sessions would have cost.
+          unpriced: b.unpriced ? Math.max((b.costUsd ?? 0) * 0.08, 0.5) : 0,
+          label: `${bucketLabel(b.startedAt, 3600_000)} — ${clock(b.endsAt)}${b.active ? " (open)" : ""}`,
+        })),
+        { format: (n) => money(n) },
+      ),
+    );
+  }
+
+  // Deliberately not `panel-wide`, unlike the burn tiles above it: a handful of
+  // blocks spread across the whole grid is five bars the width of a hand.
+  return panel(
+    "Five-hour block",
+    "Usage limits reset on rolling five-hour blocks, and a block opens with the first session after the last one closed — not on a fixed grid. One bar per block, hatched where nobody could price the work.",
+    body,
+  );
 }
 
 async function renderMetrics(): Promise<void> {
@@ -797,6 +951,10 @@ async function renderMetrics(): Promise<void> {
   host.append(stats);
 
   const grid = el("div", { className: "panel-grid" });
+
+  // Rates first: "am I about to run out" is the question a board of running
+  // agents is opened to answer, and the history below is context for it.
+  grid.append(burnPanel(m), blockPanel(m));
 
   grid.append(
     panel(
