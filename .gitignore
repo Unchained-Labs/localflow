@@ -6,3 +6,6 @@ dist/
 s.json
 board.json
 graph.json
+
+# `make demo` scratch: the synthetic machine, the frames, the encoder's logs
+.demo/
