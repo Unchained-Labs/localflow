@@ -19,6 +19,7 @@ USAGE
   localflow                        serve the board at http://127.0.0.1:7317
   localflow board                  print the board once and exit
   localflow graph <sessionId>      the graph that session actually ran, as a spec
+  localflow review <sessionId>     lint and price that graph, via graphlint and preflight
   localflow calibrate              the measured cache hit rate, for preflight.json
   localflow sessions [query]       every session on this machine, not just recent ones
   localflow tasks <sessionId>      that session's task list
@@ -52,6 +53,7 @@ WATCHING IS THE DEFAULT
 EXAMPLE
   localflow --allow-actions --allow-root ~/dev
   localflow graph f60740f7-4bda-4e90-9fd3-dbf03403068e | graphlint check -
+  localflow review f60740f7          # the same pipe, both tools, one command
 `;
 
 function flag(argv: string[], name: string): string | undefined {
@@ -133,7 +135,10 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (cmd === "board" || cmd === "graph" || cmd === "calibrate" || cmd === "metrics" || cmd === "water") {
+  if (
+    cmd === "board" || cmd === "graph" || cmd === "review" ||
+    cmd === "calibrate" || cmd === "metrics" || cmd === "water"
+  ) {
     const board = new Board(common);
     let summary;
     try {
@@ -223,6 +228,99 @@ async function main(): Promise<number> {
         }
       }
       return 0;
+    }
+
+    if (cmd === "review") {
+      const id = argv.slice(1).find((a) => !a.startsWith("-"));
+      const task = pickTask(summary.tasks, id);
+      if (!task) {
+        console.error(
+          id ? `localflow: no session on the board matches "${id}"` : "usage: localflow review <sessionId>",
+        );
+        return 2;
+      }
+
+      const { lintObserved, estimateObserved, estimateGap, lensPlan, NO_VERDICTS } =
+        await import("./family.js");
+      const spec = observedSpec(task);
+      const notes = notesFor(task);
+      // Both run against the same document, and neither is asked to wait for
+      // the other: one missing tool must not cost you the other's answer.
+      const [lint, estimate] = await Promise.all([lintObserved(spec), estimateObserved(spec)]);
+      const gap = estimateGap(task.costUsd, estimate);
+      const correlated =
+        notes.some((n) => n.rule === "correlated-verifiers") ||
+        lint.findings.some((f) => f.rule === "correlated-verifiers");
+      const lenses = correlated ? await lensPlan() : null;
+
+      if (format === "json") {
+        process.stdout.write(
+          `${JSON.stringify(
+            { spec, notes, lint, estimate, gap, lenses, noVerdicts: correlated ? NO_VERDICTS : null },
+            null,
+            2,
+          )}\n`,
+        );
+        // Exit 1 when a rule fired, the way a linter should. Absence of the
+        // linter is not a failing lint — it is exit 0 with a stated reason.
+        return lint.ok && lint.summary.errors > 0 ? 1 : 0;
+      }
+
+      const out = process.stdout;
+      out.write(`\n  ${task.title}\n`);
+      out.write(`  ${task.fanouts.length} fan-out(s), ${spec.observed.totalChildren} agent(s), widest ${spec.observed.widestFanout}\n\n`);
+
+      if (!lint.ok) {
+        out.write(`  graphlint  ${lint.detail}\n`);
+      } else {
+        const { errors, warnings, infos } = lint.summary;
+        out.write(`  graphlint ${lint.version ?? ""}  ${errors} error(s), ${warnings} warning(s), ${infos} info\n`);
+        // The caveat is per rule, not per finding: `missing-schema` fires on
+        // every node of an observed graph, and printing the same sentence four
+        // times teaches the reader to skip it.
+        const explained = new Set<string>();
+        for (const f of lint.findings) {
+          out.write(`    ${f.severity === "error" ? "✗" : "!"} ${f.rule}: ${f.message}\n`);
+          if (f.aboutTheInput && !explained.has(f.rule)) {
+            out.write(`      (${f.aboutTheInput})\n`);
+            explained.add(f.rule);
+          }
+        }
+      }
+      out.write("\n");
+
+      if (!estimate.ok) {
+        out.write(`  preflight  ${estimate.detail}\n`);
+      } else {
+        const usd = estimate.usd;
+        const agents = estimate.agents;
+        out.write(`  preflight ${estimate.version ?? ""}\n`);
+        if (agents) out.write(`    agents    ${agents.expected} expected (${agents.low}–${agents.high})\n`);
+        if (usd) out.write(`    predicted $${usd.expected.toFixed(2)} ($${usd.low.toFixed(2)}–$${usd.high.toFixed(2)})\n`);
+        out.write(`    measured  ${task.costUsd === null ? "unknown — no price for this model" : `$${task.costUsd.toFixed(2)}`}\n`);
+        if (estimate.assumedWidths.length) {
+          out.write(`    width assumed for ${estimate.assumedWidths.join(", ")}\n`);
+        }
+        if (gap) out.write(`\n  ${gap.note}\n`);
+      }
+      out.write("\n");
+
+      if (correlated) {
+        out.write(`  ${NO_VERDICTS}\n\n`);
+        if (!lenses?.ok) {
+          out.write(`  decorrelate  ${lenses?.detail ?? "not consulted"}\n`);
+        } else {
+          out.write(`  decorrelate ${lenses.version ?? ""} — a ${lenses.domain} lens plan for that panel\n`);
+          for (const l of lenses.lenses) {
+            out.write(`    ${l.key}${l.model ? `  ${l.model}` : ""}\n      ${l.question}\n`);
+            if (l.oracleHint) out.write(`      oracle: ${l.oracleHint}\n`);
+          }
+          out.write("\n  Pick a domain that fits the work: `decorrelate lenses <domain>`.\n");
+        }
+        out.write("\n");
+      }
+
+      return lint.ok && lint.summary.errors > 0 ? 1 : 0;
     }
 
     // calibrate
