@@ -213,6 +213,15 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 // ---- toasts -----------------------------------------------------------------
 
+/** An element's usable width: what is inside its own padding. */
+function innerWidthOf(node: HTMLElement, fallback = 520): number {
+  const w = node.clientWidth;
+  if (!w) return fallback;
+  const cs = getComputedStyle(node);
+  const inner = w - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0");
+  return inner > 80 ? inner : fallback;
+}
+
 function toast(msg: string, kind: "ok" | "err" | "info" = "info", ms = 6000): void {
   const t = el("div", { class: `toast ${kind}` }, msg);
   $("#toasts").append(t);
@@ -325,111 +334,294 @@ function renderBoard(b: Board): void {
 
 // ---- the graph that ran -----------------------------------------------------
 //
-// This used to be an SVG of dots on a spine, drawn in viewBox units and then
-// scaled to whatever width the drawer happened to be. Two things were wrong
-// with that. The scaling made every font size a guess — 5 user units became
-// whatever the container decided, which is why the word "session" arrived
-// three times the size of the labels under it. And the picture carried almost
-// no information: anonymous dots said a fan-out was five wide without saying
-// what any of the five were doing, which is the first thing anyone asks.
+// A real DAG, drawn as one: a root, a layer per group, edges that split into
+// the agents issued together and converge again at the barrier that followed.
 //
-// So it is DOM now, at real pixel sizes, and it renders what the server's own
-// spec says rather than re-deriving it here. The children carry their
-// descriptions, the barriers carry the reason the server recorded for them,
-// and a verifier panel is labelled because `observedSpec` labelled it — the
-// rule lives in src/graph.ts and this only draws its answer.
+// Two earlier versions were wrong in opposite directions. The first was an SVG
+// of dots on a spine drawn in viewBox units and scaled to whatever width the
+// drawer happened to be, so every font size was a function of container width —
+// which is why "session" arrived three times the size of the labels under it.
+// The second fixed the type by giving up on drawing: a stack of DOM rows, which
+// reads well and is not a graph. Nothing branched, nothing converged, and a
+// five-wide fan-out did not visibly fan out.
+//
+// The mistake was blaming SVG for what viewBox scaling did. Drawn at 1:1 pixel
+// units there is no scaling to go wrong, so this is a diagram with predictable
+// type: the nodes are boxes with the child's own description in them, the edges
+// are the real edges, and when the widest layer does not fit the panel scrolls
+// sideways rather than shrinking the text until it stops being text.
 
-/** Children drawn before a row collapses into a "+N" chip. */
-const KIDS_SHOWN = 6;
+const NS = "http://www.w3.org/2000/svg";
 
-/** One row of the graph: a group of agent calls issued together. */
-function graphRow(f: Task["fanouts"][number], node: SpecNode | undefined, index: number): HTMLElement {
-  const row = el("div", { class: "dag-node" });
+/** Geometry. Pixels, all of them, because the drawing is never rescaled. */
+const NODE_W = 116;
+const NODE_H = 46;
+const GAP_X = 12;
+const LAYER_GAP = 58;   // room between a layer and the next, where the barrier sits
+const PAD = 14;
+/** Every layer is captioned above itself, so the first one needs the room. */
+const CAPTION_H = 16;
+const ROOT_W = 168;
+/** Below this the boxes stop holding a readable word, so the panel scrolls instead. */
+const MIN_NODE_W = 84;
 
-  const head = el("div", { class: "dag-head" });
-  head.append(el("span", { class: "dag-phase" }, node?.phase ?? `Fan-out ${index + 1}`));
-  head.append(el("span", { class: "dag-width" }, f.width === 1 ? "1 agent" : `${f.width} wide`));
-  if (f.failed) {
-    head.append(el("span", { class: "dag-tag bad" }, `${f.failed} failed`));
-  }
-  // Labelled by the server, not guessed here: `harness.kind` is set by
-  // observedSpec when the group looked like a panel of verifiers.
-  if (node?.harness?.kind) {
-    head.append(el("span", { class: "dag-tag warn" }, node.harness.kind));
-  }
-  row.append(head);
+/** Attach a `<title>`, which is how an SVG node gets a tooltip. */
+function titled<T extends SVGElement>(node: T, text: string): T {
+  const t = document.createElementNS(NS, "title");
+  t.textContent = text;
+  node.append(t);
+  return node;
+}
 
-  const kids = el("div", { class: "dag-kids" });
-  const shown = f.children.slice(0, KIDS_SHOWN);
-  shown.forEach((c, k) => {
-    const chip = el("span", { class: `dag-kid${k < f.failed ? " bad" : ""}` });
-    chip.textContent = c.description || c.agentType || "agent";
-    // The prompt is the evidence for everything above — correlated verifiers,
-    // in particular, are a claim about these strings.
-    chip.title = [c.agentType && `[${c.agentType}]`, c.description, c.prompt]
-      .filter(Boolean)
-      .join("\n\n");
-    kids.append(chip);
-  });
-  if (f.children.length > shown.length) {
-    const rest = f.children.slice(shown.length);
-    const more = el("span", { class: "dag-kid more" }, `+${rest.length}`);
-    // Truncation that says what it dropped. A silent "…" reads as "that is all
-    // of them", which is the one thing it must not mean.
-    more.title = rest.map((c) => c.description || "agent").join("\n");
-    kids.append(more);
-  }
-  row.append(kids);
-  return row;
+function svg<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, string | number> = {},
+): SVGElementTagNameMap[K] {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+  return n;
 }
 
 /**
- * The whole graph: the session, then each group, joined by what the transcript
- * says happened between them.
+ * Fit a label into a box, in lines.
+ *
+ * SVG text has no `text-overflow`, so the wrapping is done here against the
+ * monospace advance rather than guessed. Two lines, then an ellipsis — and the
+ * full text is on the node's `<title>` either way, so truncation never loses
+ * anything, it only defers it to the pointer.
  */
-function graphView(t: Task, spec: ObservedSpec | null): HTMLElement | null {
-  if (!t.fanouts.length) return null;
-
-  const dag = el("div", { class: "dag" });
-
-  const root = el("div", { class: "dag-node root" });
-  const rootHead = el("div", { class: "dag-head" });
-  rootHead.append(el("span", { class: "dag-phase" }, "session"));
-  const tier = spec?.nodes.find((n) => n.id === "session")?.tier;
-  for (const bit of [shortModel(t.model), tier, t.effort && `${t.effort} effort`]) {
-    if (bit) rootHead.append(el("span", { class: "dag-width" }, bit));
+function fitLabel(text: string, width: number, lines = 2, charPx = 5.9): string[] {
+  const perLine = Math.max(4, Math.floor((width - 12) / charPx));
+  const words = text.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const trial = cur ? `${cur} ${w}` : w;
+    if (trial.length <= perLine) {
+      cur = trial;
+      continue;
+    }
+    if (cur) out.push(cur);
+    cur = w;
+    if (out.length === lines) break;
   }
-  root.append(rootHead);
-  dag.append(root);
+  if (cur && out.length < lines) out.push(cur);
+  if (!out.length) return [text.slice(0, perLine)];
+  // A word longer than the line, and the tail that did not fit, both end in "…".
+  const consumed = out.join(" ").length;
+  if (consumed < text.length) {
+    const last = out[out.length - 1] ?? "";
+    out[out.length - 1] = `${last.slice(0, Math.max(1, perLine - 1))}…`;
+  }
+  return out;
+}
+
+interface Layer {
+  /** Empty for the root layer, which is one node with no fan-out. */
+  children: { label: string; title: string; failed: boolean }[];
+  phase: string;
+  meta: string;
+  /** The barrier that preceded this layer, if the spec recorded one. */
+  barrier?: string;
+  /** The server called this group a panel of verifiers. */
+  panel?: string;
+}
+
+/** Turn the task and its spec into layers. All the reading happens here. */
+function graphLayers(t: Task, spec: ObservedSpec | null): Layer[] {
+  const tier = spec?.nodes.find((n) => n.id === "session")?.tier;
+  const layers: Layer[] = [
+    {
+      children: [],
+      phase: "session",
+      meta: [shortModel(t.model), tier, t.effort && `${t.effort} effort`].filter(Boolean).join(" · "),
+    },
+  ];
 
   // nodes[0] is the session; nodes[i + 1] and edges[i] belong to fanouts[i].
-  let lastReason = "";
   t.fanouts.forEach((f, i) => {
+    const node = spec?.nodes[i + 1];
     const edge = spec?.edges[i];
-    const join = el("div", { class: "dag-join" });
-    if (edge?.barrier) {
-      const tag = el("span", { class: "dag-barrier" }, "barrier");
-      // The reason is the server's wording, verbatim. Every observed barrier
-      // begins "observed:" precisely because it is a measurement and not a
-      // claim that the barrier was needed.
-      const reason = edge.barrierReason ?? "";
-      tag.title = reason;
-      join.append(tag);
-      // Every barrier keeps its pill, but the sentence is printed only when it
-      // changes. Four consecutive groups produce four identical reasons, and a
-      // paragraph repeated down the side of a diagram stops being read — the
-      // pill is the fact, the prose is the explanation, and the explanation
-      // only has to arrive once.
-      if (reason && reason !== lastReason) {
-        join.append(el("span", { class: "dag-join-why" }, reason.replace(/^observed:\s*/, "")));
-        lastReason = reason;
+    layers.push({
+      phase: node?.phase ?? `Fan-out ${i + 1}`,
+      meta: `${f.width === 1 ? "1 agent" : `${f.width} wide`}${f.failed ? ` · ${f.failed} failed` : ""}`,
+      barrier: edge?.barrier ? (edge.barrierReason ?? "observed") : undefined,
+      // Labelled by the server, not guessed here: `harness.kind` is set by
+      // observedSpec when the group looked like a panel of verifiers.
+      panel: node?.harness?.kind,
+      children: f.children.map((c, k) => ({
+        label: c.description || c.agentType || "agent",
+        title: [c.agentType && `[${c.agentType}]`, c.description, c.prompt].filter(Boolean).join("\n\n"),
+        failed: k < f.failed,
+      })),
+    });
+  });
+  return layers;
+}
+
+/**
+ * The whole graph.
+ *
+ * Node width shrinks to fit the panel down to a floor, and past that the panel
+ * scrolls. Shrinking without a floor is how the first version ended up with
+ * text nobody could read, and hiding the overflow would be a diagram that lies
+ * about how wide the fan-out got.
+ */
+function graphView(t: Task, spec: ObservedSpec | null, available: number): HTMLElement | null {
+  if (!t.fanouts.length) return null;
+
+  const layers = graphLayers(t, spec);
+  const widest = Math.max(1, ...layers.map((l) => l.children.length));
+
+  const usable = Math.max(240, available - PAD * 2);
+  const nodeW = Math.max(MIN_NODE_W, Math.min(NODE_W, Math.floor((usable - GAP_X * (widest - 1)) / widest)));
+  const rowW = Math.max(ROOT_W, widest * nodeW + (widest - 1) * GAP_X);
+  const width = rowW + PAD * 2;
+  const height = PAD * 2 + CAPTION_H + layers.length * NODE_H + (layers.length - 1) * LAYER_GAP;
+
+  const agents = layers.slice(1).reduce((a, l) => a + l.children.length, 0);
+  const root = titled(
+    svg("svg", { width, height, class: "dag-svg", role: "img" }),
+    `${t.fanouts.length} fan-out(s), ${agents} agent(s)`,
+  );
+
+  const centreX = PAD + rowW / 2;
+  let y = PAD + CAPTION_H;
+
+  /** Where the previous layer's edges leave from. */
+  let hubY = 0;
+
+  layers.forEach((layer, li) => {
+    const isRoot = li === 0;
+    const n = Math.max(1, layer.children.length);
+    const w = isRoot ? ROOT_W : nodeW;
+    const rowWidth = isRoot ? ROOT_W : n * nodeW + (n - 1) * GAP_X;
+    const x0 = centreX - rowWidth / 2;
+
+    // ---- the edges into this layer -----------------------------------------
+    if (li > 0) {
+      const midY = hubY + LAYER_GAP / 2;
+      // Down from the previous layer's hub, across, then down into each node:
+      // an orthogonal split, which is what makes a fan-out read as a fan-out.
+      root.append(svg("path", { class: "dag-edge", d: `M ${centreX} ${hubY} V ${midY}` }));
+      for (let k = 0; k < n; k++) {
+        const cx = x0 + k * (w + GAP_X) + w / 2;
+        root.append(
+          svg("path", { class: "dag-edge", d: `M ${centreX} ${midY} H ${cx} V ${y}` }),
+        );
+      }
+      if (layer.barrier) {
+        root.append(
+          titled(
+            svg("line", {
+              class: "dag-barrier-line",
+              x1: centreX - Math.min(rowWidth, 120) / 2,
+              x2: centreX + Math.min(rowWidth, 120) / 2,
+              y1: midY,
+              y2: midY,
+            }),
+            layer.barrier,
+          ),
+        );
       }
     }
-    dag.append(join);
-    dag.append(graphRow(f, spec?.nodes[i + 1], i));
+
+    // ---- the layer's own label ---------------------------------------------
+    //
+    // Sat directly on the edges before, so the split lines ran through the
+    // letters. Knocked out of the background instead: the caption is text over
+    // a drawing, and text over a drawing needs the drawing to stop behind it.
+    const head = `${layer.phase}${layer.meta ? `  ${layer.meta}` : ""}`;
+    const headW = (head.length + (layer.panel ? layer.panel.length + 2 : 0)) * 5.9;
+    root.append(
+      svg("rect", {
+        class: "dag-caption-bg",
+        x: PAD - 4,
+        y: y - 19,
+        width: headW + 8,
+        height: 15,
+        rx: 3,
+      }),
+    );
+    const caption = svg("text", { class: "dag-caption", x: PAD, y: y - 8 });
+    caption.textContent = head;
+    root.append(caption);
+    if (layer.panel) {
+      const tag = svg("text", { class: "dag-caption panel", x: PAD + (head.length + 2) * 5.9, y: y - 8 });
+      tag.textContent = layer.panel;
+      root.append(tag);
+    }
+
+    // ---- the nodes ----------------------------------------------------------
+    if (isRoot) {
+      const g = svg("g", { class: "dag-n root" });
+      g.append(svg("rect", { x: x0, y, width: ROOT_W, height: NODE_H, rx: 7 }));
+      const label = svg("text", { class: "dag-label", x: x0 + ROOT_W / 2, y: y + NODE_H / 2 + 4 });
+      label.textContent = "session";
+      g.append(label);
+      root.append(g);
+    } else {
+      layer.children.forEach((c, k) => {
+        const x = x0 + k * (nodeW + GAP_X);
+        const g = svg("g", { class: `dag-n${c.failed ? " bad" : ""}` });
+        g.append(svg("rect", { x, y, width: nodeW, height: NODE_H, rx: 6 }));
+        const lines = fitLabel(c.label, nodeW);
+        lines.forEach((line, i) => {
+          const text = svg("text", {
+            class: "dag-label",
+            x: x + nodeW / 2,
+            y: y + NODE_H / 2 + (lines.length === 1 ? 4 : i * 12 - 1),
+          });
+          text.textContent = line;
+          g.append(text);
+        });
+        // The prompt is the evidence for everything the panel above claims —
+        // correlated verifiers in particular are an assertion about these strings.
+        titled(g, c.title);
+        root.append(g);
+      });
+    }
+
+    hubY = y + NODE_H;
+    y += NODE_H + LAYER_GAP;
   });
 
-  return dag;
+  const wrap = el("div", { class: "dag" });
+  wrap.append(root);
+  return wrap;
+}
+
+/**
+ * The same graph, given the window instead of the drawer.
+ *
+ * A `<dialog>` rather than a new pane: Escape and the backdrop already work,
+ * and the graph is something you open, look at, and close rather than a place
+ * you navigate to.
+ */
+function expandGraph(t: Task, spec: ObservedSpec | null): void {
+  const dlg = document.createElement("dialog");
+  dlg.className = "graph-modal";
+
+  const head = el("div", { class: "graph-modal-head" });
+  head.append(el("strong", {}, t.title));
+  const close = el("button", { class: "icon" }, "✕");
+  close.addEventListener("click", () => dlg.close());
+  head.append(close);
+  dlg.append(head);
+
+  // Room for the drawing, less the dialog's own padding and a margin from the
+  // window edge. The layout still scrolls past this; it just rarely has to.
+  const wide = Math.min(window.innerWidth - 120, 1400);
+  const g = graphView(t, spec, wide);
+  if (g) dlg.append(g);
+
+  dlg.addEventListener("close", () => dlg.remove());
+  // Clicking the backdrop is a click on the dialog itself, outside its content.
+  dlg.addEventListener("click", (e) => {
+    if (e.target === dlg) dlg.close();
+  });
+  document.body.append(dlg);
+  dlg.showModal();
 }
 
 /**
@@ -607,13 +799,25 @@ async function openDrawer(id: string): Promise<void> {
     /* the graph is a nicety; the drawer is still useful without it */
   }
 
-  const g = graphView(t, detail?.spec ?? null);
+  // The drawer's inner width, so the layout can decide between fitting and
+  // scrolling rather than scaling the type away. clientWidth includes the
+  // padding, and laying out into padding is how a layer ends up under the edge
+  // of the panel — so the padding comes off before it is used.
+  const room = innerWidthOf($("#d-body"));
+  const g = graphView(t, detail?.spec ?? null, room);
   if (g) {
+    const head = el("div", { class: "sec-head" }, el("h4", {}, "the graph that ran"));
+    // A wide fan-out does not fit a 600px drawer at any type size worth
+    // reading, so the graph gets somewhere to be looked at properly rather
+    // than being shrunk until it is a texture.
+    const expand = el("button", { class: "btn btn-quiet" }, "expand");
+    expand.addEventListener("click", () => expandGraph(t, detail?.spec ?? null));
+    head.append(expand);
     body.append(
       el(
         "section",
         { class: "sec" },
-        el("h4", {}, "the graph that ran"),
+        head,
         g,
         el(
           "p",
