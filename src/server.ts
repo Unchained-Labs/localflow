@@ -33,6 +33,7 @@ import type { ActionContext } from "./actions.js";
 import { Board } from "./board.js";
 import type { BoardOptions } from "./board.js";
 import { notesFor, observedSpec } from "./graph.js";
+import { NO_VERDICTS, estimateGap, estimateObserved, lensPlan, lintObserved } from "./family.js";
 import { otterTasks, otterUrl } from "./otter.js";
 import { summarise } from "./board.js";
 import { AdapterRegistry } from "./agents/registry.js";
@@ -272,6 +273,36 @@ export class LocalflowServer {
       const task = this.findTask(decodeURIComponent(graph[1]!));
       if (!task) return send(res, 404, { error: "no such task on the current board" });
       return send(res, 200, { spec: observedSpec(task), notes: notesFor(task) });
+    }
+
+    // graphlint and preflight, run against that same graph. Separate from
+    // /graph and fetched on demand, because these are two subprocesses: the
+    // drawer must open at the speed of a local read whether or not the rest of
+    // the family is installed.
+    const review = /^\/api\/task\/([^/]+)\/review$/.exec(url.pathname);
+    if (review) {
+      const task = this.findTask(decodeURIComponent(review[1]!));
+      if (!task) return send(res, 404, { error: "no such task on the current board" });
+      const spec = observedSpec(task);
+      const [lint, estimate] = await Promise.all([lintObserved(spec), estimateObserved(spec)]);
+
+      // The lens plan is only fetched when something actually caught a panel of
+      // verifiers asking one question — either this board's own note or
+      // graphlint's rule. Offering the fix beside a problem nobody has is how a
+      // panel becomes furniture.
+      const correlated =
+        notesFor(task).some((n) => n.rule === "correlated-verifiers") ||
+        lint.findings.some((f) => f.rule === "correlated-verifiers");
+
+      return send(res, 200, {
+        lint,
+        estimate,
+        gap: estimateGap(task.costUsd, estimate),
+        lenses: correlated ? await lensPlan() : null,
+        // Said even when the plan is there: the plan is the fix, and the reason
+        // localflow cannot measure the problem itself is a separate fact.
+        noVerdicts: correlated ? NO_VERDICTS : null,
+      });
     }
 
     if (url.pathname.startsWith("/api/actions/")) return await this.action(url.pathname, req, res);

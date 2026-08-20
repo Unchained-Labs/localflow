@@ -56,6 +56,94 @@ interface Task {
   transcriptPath?: string;
 }
 
+/**
+ * The observed graph, exactly as `/api/task/<id>/graph` serves it.
+ *
+ * Mirrors ObservedSpec in src/graph.ts. The drawer reads it rather than
+ * re-deriving anything from the fan-outs: which groups are verifier panels and
+ * why a barrier is a barrier are rules, the server owns them, and a second
+ * implementation here would eventually disagree with the first.
+ */
+interface SpecNode {
+  id: string;
+  tier?: string;
+  phase?: string;
+  model?: string;
+  fanout?: { over: string; width: number; maxConcurrent?: number };
+  harness?: { kind: string; lenses?: string[]; passIf?: string };
+}
+
+interface SpecEdge {
+  from: string;
+  to: string;
+  channel?: string;
+  barrier?: boolean;
+  barrierReason?: string;
+}
+
+interface ObservedSpec {
+  name: string;
+  description: string;
+  nodes: SpecNode[];
+  edges: SpecEdge[];
+  observed: {
+    sessionId: string;
+    model?: string;
+    fanouts: number;
+    widestFanout: number;
+    totalChildren: number;
+    failedChildren: number;
+    capturedAt: string;
+  };
+}
+
+/** What `/api/task/<id>/review` returns: the family's opinion of this graph. */
+interface LintFinding {
+  rule: string;
+  severity: "error" | "warning" | "info";
+  message: string;
+  aboutTheInput?: string;
+}
+
+interface ReviewDetail {
+  lint: {
+    ok: boolean;
+    detail: string;
+    version?: string;
+    findings: LintFinding[];
+    summary: { errors: number; warnings: number; infos: number };
+  };
+  estimate: {
+    ok: boolean;
+    detail: string;
+    version?: string;
+    agents?: { low: number; expected: number; high: number };
+    usd?: { low: number; expected: number; high: number };
+    assumedWidths: string[];
+  };
+  gap: { ratio: number; note: string } | null;
+  lenses: {
+    ok: boolean;
+    detail: string;
+    version?: string;
+    domain: string;
+    lenses: { key: string; question: string; catches: string; model?: string; oracleHint?: string }[];
+  } | null;
+  noVerdicts: string | null;
+}
+
+interface GraphNote {
+  level: "info" | "warn";
+  rule: string;
+  message: string;
+}
+
+/** What the graph endpoint returns in one response. */
+interface GraphDetail {
+  spec: ObservedSpec;
+  notes: GraphNote[];
+}
+
 interface Board {
   tasks: Task[];
   lanes: Record<Lane, number>;
@@ -235,54 +323,215 @@ function renderBoard(b: Board): void {
   }
 }
 
-// ---- fan-out graph ----------------------------------------------------------
+// ---- the graph that ran -----------------------------------------------------
+//
+// This used to be an SVG of dots on a spine, drawn in viewBox units and then
+// scaled to whatever width the drawer happened to be. Two things were wrong
+// with that. The scaling made every font size a guess — 5 user units became
+// whatever the container decided, which is why the word "session" arrived
+// three times the size of the labels under it. And the picture carried almost
+// no information: anonymous dots said a fan-out was five wide without saying
+// what any of the five were doing, which is the first thing anyone asks.
+//
+// So it is DOM now, at real pixel sizes, and it renders what the server's own
+// spec says rather than re-deriving it here. The children carry their
+// descriptions, the barriers carry the reason the server recorded for them,
+// and a verifier panel is labelled because `observedSpec` labelled it — the
+// rule lives in src/graph.ts and this only draws its answer.
 
-/** Draw the fan-outs a session actually performed. Geometry, not a library. */
-function graphSvg(t: Task): SVGElement | null {
-  if (!t.fanouts.length) return null;
-  const NS = "http://www.w3.org/2000/svg";
-  const rowH = 26;
-  // Size the canvas to the widest fan-out. A fixed width left a session that
-  // only ever called one agent at a time floating in three-quarters of nothing.
-  const widest = Math.min(12, t.fanouts.reduce((a, f) => Math.max(a, f.width), 1));
-  const w = Math.max(96, 54 + widest * 14);
-  const h = 14 + t.fanouts.length * rowH + 8;
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  svg.setAttribute("class", "graph");
+/** Children drawn before a row collapses into a "+N" chip. */
+const KIDS_SHOWN = 6;
 
-  const mk = (tag: string, attrs: Record<string, string | number>) => {
-    const n = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
-    return n;
-  };
+/** One row of the graph: a group of agent calls issued together. */
+function graphRow(f: Task["fanouts"][number], node: SpecNode | undefined, index: number): HTMLElement {
+  const row = el("div", { class: "dag-node" });
 
-  const spineX = 22;
-  svg.append(mk("line", { x1: spineX, y1: 10, x2: spineX, y2: h - 8, stroke: "#232B35", "stroke-width": 1.2 }));
-  const root = mk("circle", { cx: spineX, cy: 10, r: 3.2, fill: "#00D4AA" });
-  svg.append(root);
-  const rootLabel = mk("text", { x: spineX + 7, y: 12 });
-  rootLabel.textContent = "session";
-  svg.append(rootLabel);
+  const head = el("div", { class: "dag-head" });
+  head.append(el("span", { class: "dag-phase" }, node?.phase ?? `Fan-out ${index + 1}`));
+  head.append(el("span", { class: "dag-width" }, f.width === 1 ? "1 agent" : `${f.width} wide`));
+  if (f.failed) {
+    head.append(el("span", { class: "dag-tag bad" }, `${f.failed} failed`));
+  }
+  // Labelled by the server, not guessed here: `harness.kind` is set by
+  // observedSpec when the group looked like a panel of verifiers.
+  if (node?.harness?.kind) {
+    head.append(el("span", { class: "dag-tag warn" }, node.harness.kind));
+  }
+  row.append(head);
 
-  t.fanouts.forEach((f, i) => {
-    const y = 10 + (i + 1) * rowH;
-    svg.append(mk("line", { x1: spineX, y1: y - rowH, x2: spineX, y2: y, stroke: "#313B47", "stroke-width": 1.2 }));
-    // Children spread to the right; the width of the spread is the width of the
-    // fan-out, which is the whole point of drawing it.
-    const n = Math.min(f.width, 12);
-    const gap = Math.min(14, (w - spineX - 24) / Math.max(n, 1));
-    for (let k = 0; k < n; k++) {
-      const cx = spineX + 16 + k * gap;
-      svg.append(mk("line", { x1: spineX, y1: y - 6, x2: cx, y2: y, stroke: "#313B47", "stroke-width": 0.9 }));
-      const failed = k < f.failed;
-      svg.append(mk("circle", { cx, cy: y, r: 2.6, fill: failed ? "#E5484D" : "#A8B3BF" }));
-    }
-    const label = mk("text", { x: spineX + 16 + n * gap + 4, y: y + 2, class: "small" });
-    label.textContent = `${f.width}${f.width > n ? "+" : ""}${f.failed ? ` · ${f.failed} failed` : ""}`;
-    svg.append(label);
+  const kids = el("div", { class: "dag-kids" });
+  const shown = f.children.slice(0, KIDS_SHOWN);
+  shown.forEach((c, k) => {
+    const chip = el("span", { class: `dag-kid${k < f.failed ? " bad" : ""}` });
+    chip.textContent = c.description || c.agentType || "agent";
+    // The prompt is the evidence for everything above — correlated verifiers,
+    // in particular, are a claim about these strings.
+    chip.title = [c.agentType && `[${c.agentType}]`, c.description, c.prompt]
+      .filter(Boolean)
+      .join("\n\n");
+    kids.append(chip);
   });
-  return svg;
+  if (f.children.length > shown.length) {
+    const rest = f.children.slice(shown.length);
+    const more = el("span", { class: "dag-kid more" }, `+${rest.length}`);
+    // Truncation that says what it dropped. A silent "…" reads as "that is all
+    // of them", which is the one thing it must not mean.
+    more.title = rest.map((c) => c.description || "agent").join("\n");
+    kids.append(more);
+  }
+  row.append(kids);
+  return row;
+}
+
+/**
+ * The whole graph: the session, then each group, joined by what the transcript
+ * says happened between them.
+ */
+function graphView(t: Task, spec: ObservedSpec | null): HTMLElement | null {
+  if (!t.fanouts.length) return null;
+
+  const dag = el("div", { class: "dag" });
+
+  const root = el("div", { class: "dag-node root" });
+  const rootHead = el("div", { class: "dag-head" });
+  rootHead.append(el("span", { class: "dag-phase" }, "session"));
+  const tier = spec?.nodes.find((n) => n.id === "session")?.tier;
+  for (const bit of [shortModel(t.model), tier, t.effort && `${t.effort} effort`]) {
+    if (bit) rootHead.append(el("span", { class: "dag-width" }, bit));
+  }
+  root.append(rootHead);
+  dag.append(root);
+
+  // nodes[0] is the session; nodes[i + 1] and edges[i] belong to fanouts[i].
+  let lastReason = "";
+  t.fanouts.forEach((f, i) => {
+    const edge = spec?.edges[i];
+    const join = el("div", { class: "dag-join" });
+    if (edge?.barrier) {
+      const tag = el("span", { class: "dag-barrier" }, "barrier");
+      // The reason is the server's wording, verbatim. Every observed barrier
+      // begins "observed:" precisely because it is a measurement and not a
+      // claim that the barrier was needed.
+      const reason = edge.barrierReason ?? "";
+      tag.title = reason;
+      join.append(tag);
+      // Every barrier keeps its pill, but the sentence is printed only when it
+      // changes. Four consecutive groups produce four identical reasons, and a
+      // paragraph repeated down the side of a diagram stops being read — the
+      // pill is the fact, the prose is the explanation, and the explanation
+      // only has to arrive once.
+      if (reason && reason !== lastReason) {
+        join.append(el("span", { class: "dag-join-why" }, reason.replace(/^observed:\s*/, "")));
+        lastReason = reason;
+      }
+    }
+    dag.append(join);
+    dag.append(graphRow(f, spec?.nodes[i + 1], i));
+  });
+
+  return dag;
+}
+
+/**
+ * What graphlint and preflight say about the graph that ran.
+ *
+ * Everything here is passed through from the tools themselves. Absence is
+ * rendered as absence — "graphlint is not installed" is a different sentence
+ * from "graphlint found nothing", and a panel that blurred the two would be the
+ * false clean this family exists to argue against.
+ */
+async function appendReview(body: HTMLElement, t: Task): Promise<void> {
+  let r: ReviewDetail;
+  try {
+    const res = await fetch(`/api/task/${encodeURIComponent(t.id)}/review`);
+    if (!res.ok) return;
+    r = (await res.json()) as ReviewDetail;
+  } catch {
+    return;
+  }
+  // The drawer may have moved on to another session while two subprocesses ran.
+  if (selected !== t.id) return;
+
+  const sec = el("section", { class: "sec" }, el("h4", {}, "what the rest of the family says"));
+
+  if (!r.lint.ok) {
+    sec.append(el("p", { class: "hint" }, r.lint.detail));
+  } else {
+    const { errors, warnings } = r.lint.summary;
+    sec.append(
+      el(
+        "p",
+        { class: "hint" },
+        `graphlint ${r.lint.version ?? ""} — ${errors} error(s), ${warnings} warning(s).`,
+      ),
+    );
+    // One caveat per rule rather than per finding: missing-schema fires on
+    // every node of an observed graph, and the same sentence four times is a
+    // sentence nobody reads.
+    const explained = new Set<string>();
+    for (const f of r.lint.findings) {
+      const note = el("div", { class: `note ${f.severity === "error" ? "warn" : "info"}` });
+      note.append(el("b", {}, f.rule), f.message);
+      if (f.aboutTheInput && !explained.has(f.rule)) {
+        note.append(el("span", { class: "note-aside" }, f.aboutTheInput));
+        explained.add(f.rule);
+      }
+      sec.append(note);
+    }
+  }
+
+  if (!r.estimate.ok) {
+    sec.append(el("p", { class: "hint" }, r.estimate.detail));
+  } else {
+    const usd = r.estimate.usd;
+    const kv = el("dl", { class: "kv" });
+    if (r.estimate.agents) {
+      kv.append(
+        el("dt", {}, "agents"),
+        el("dd", {}, `${r.estimate.agents.expected} expected (${r.estimate.agents.low}–${r.estimate.agents.high})`),
+      );
+    }
+    if (usd) {
+      kv.append(
+        el("dt", {}, "predicted"),
+        el("dd", {}, `${money(usd.expected)} (${money(usd.low)} – ${money(usd.high)})`),
+      );
+    }
+    kv.append(
+      el("dt", {}, "measured"),
+      el("dd", {}, t.costUsd === null ? "unknown — no price for this model" : money(t.costUsd)),
+    );
+    sec.append(kv);
+    if (r.gap) sec.append(el("p", { class: "hint" }, r.gap.note));
+  }
+
+  // A panel of verifiers that all asked one question has a fix, and the fix is
+  // a command. What localflow deliberately does *not* do sits above it: the
+  // measurement needs verdicts, and a transcript has none.
+  if (r.noVerdicts) {
+    sec.append(el("p", { class: "hint" }, r.noVerdicts));
+    if (!r.lenses?.ok) {
+      sec.append(el("p", { class: "hint" }, r.lenses?.detail ?? ""));
+    } else {
+      sec.append(
+        el("p", { class: "hint" }, `decorrelate ${r.lenses.version ?? ""} — a ${r.lenses.domain} lens plan for that panel:`),
+      );
+      const list = el("div", { class: "lenses" });
+      for (const l of r.lenses.lenses) {
+        const item = el("div", { class: "lens" });
+        const head = el("div", { class: "lens-head" });
+        head.append(el("span", { class: "lens-key" }, l.key));
+        if (l.model) head.append(el("span", { class: "lens-model" }, shortModel(l.model)));
+        item.append(head, el("div", { class: "lens-q" }, l.question));
+        if (l.oracleHint) item.append(el("div", { class: "lens-oracle" }, `oracle: ${l.oracleHint}`));
+        list.append(item);
+      }
+      sec.append(list);
+      sec.append(el("p", { class: "hint" }, "Pick a domain that fits the work: decorrelate lenses <domain>."));
+    }
+  }
+
+  body.append(sec);
 }
 
 // ---- drawer -----------------------------------------------------------------
@@ -346,7 +595,19 @@ async function openDrawer(id: string): Promise<void> {
     body.append(el("section", { class: "sec" }, el("h4", {}, "tool calls"), list));
   }
 
-  const g = graphSvg(t);
+  // The graph and the notes about it come from one request. They used to be two
+  // things — a picture drawn from the card's own fan-outs, and notes fetched
+  // afterwards — which meant the picture and the rules that judge it could
+  // disagree about what they were looking at.
+  let detail: GraphDetail | null = null;
+  try {
+    const res = await fetch(`/api/task/${encodeURIComponent(t.id)}/graph`);
+    if (res.ok) detail = (await res.json()) as GraphDetail;
+  } catch {
+    /* the graph is a nicety; the drawer is still useful without it */
+  }
+
+  const g = graphView(t, detail?.spec ?? null);
   if (g) {
     body.append(
       el(
@@ -365,22 +626,18 @@ async function openDrawer(id: string): Promise<void> {
 
   body.append(el("section", { class: "sec" }, el("h4", {}, "actions"), actionButtons(t)));
 
-  // Notes come from the server, which owns the rules.
-  try {
-    const res = await fetch(`/api/task/${encodeURIComponent(t.id)}/graph`);
-    if (res.ok) {
-      const { notes } = (await res.json()) as { notes: { level: string; rule: string; message: string }[] };
-      if (notes.length) {
-        const sec = el("section", { class: "sec" }, el("h4", {}, "notes on this run"));
-        for (const n of notes) {
-          sec.append(el("div", { class: `note ${n.level}` }, el("b", {}, n.rule), n.message));
-        }
-        body.append(sec);
-      }
+  if (detail?.notes.length) {
+    const sec = el("section", { class: "sec" }, el("h4", {}, "notes on this run"));
+    for (const n of detail.notes) {
+      sec.append(el("div", { class: `note ${n.level}` }, el("b", {}, n.rule), n.message));
     }
-  } catch {
-    /* notes are a nicety; the drawer is still useful without them */
+    body.append(sec);
   }
+
+  // The rest of the family, on the same graph. Appended last and fetched
+  // separately: it costs two subprocesses, and the drawer should not wait on
+  // them to show what it already knows.
+  if (detail?.spec) void appendReview(body, t);
 
   $("#drawer").hidden = false;
   $("#scrim").hidden = false;

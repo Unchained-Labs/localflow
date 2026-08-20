@@ -275,6 +275,26 @@ await evaluate(`
 await wait(600);
 await capture("actions", "actions, and what it noticed about this run", ".drawer");
 
+// graphlint, preflight and decorrelate, run against the graph above. All three
+// are optional, and the beat drops itself when they are not installed rather
+// than filming three "not installed" lines.
+const family = await evaluate(`
+  (() => {
+    const b = document.querySelector('.drawer-body');
+    const sec = [...b.querySelectorAll('.sec')].find(s => /rest of the family/i.test(s.textContent));
+    if (!sec) return 0;
+    sec.scrollIntoView({ block: 'start' });
+    // Only worth a beat when at least one of them actually answered.
+    return sec.querySelectorAll('.note, .kv dt, .lens').length;
+  })()
+`);
+if (family > 0) {
+  await wait(700);
+  await capture("family", "what graphlint, preflight and decorrelate say about it", ".drawer");
+} else {
+  console.log("   (skipped: family — graphlint/preflight/decorrelate not installed)");
+}
+
 // Reroute: the model picker.
 const rerouted = await evaluate(`
   (() => {

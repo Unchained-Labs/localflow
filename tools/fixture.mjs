@@ -232,7 +232,18 @@ const sessions = [
     perCall: { input: 2_800, output: 2_400, cacheRead: 372_000, cacheWrite: 21_000, thinking: 900 },
     tools: { Read: 61, Bash: 52, Edit: 37 },
     toolErrors: 4,
-    fanouts: [{ atCall: 0.55, children: ["check soif's json shape", "check the tier-assumption wording"] }],
+    // Eight wide on purpose: the drawer's graph collapses a group past six
+    // children into a "+N" chip, and a fixture whose widest fan-out is five
+    // never draws that chip, so nobody finds out it is broken.
+    fanouts: [
+      { atCall: 0.55, children: ["check soif's json shape", "check the tier-assumption wording"] },
+      { atCall: 0.81, failed: 1, children: [
+        "price opus against the table", "price sonnet against the table",
+        "price haiku against the table", "price the local model",
+        "check the region default", "check the embodied-water flag",
+        "check the assumed-tier wording", "check the unknown-model path",
+      ] },
+    ],
   },
   {
     id: "c7a0f4b8-91e2-4d55-a3c1-6b8e02f7dd94",

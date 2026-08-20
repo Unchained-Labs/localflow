@@ -298,6 +298,87 @@ sayable at all — three verifiers whose prompts are 100% alike, a fan-out where
 children failed, a session running at a 12% cache hit rate. It does not
 duplicate graphlint's rule set, because two rule sets eventually disagree.
 
+### One command instead of the pipe
+
+That pipe was a line in a README telling you to run three tools by hand.
+`localflow review` is the same pipe with the plumbing on this side:
+
+```sh
+localflow review f60740f7
+```
+
+```
+  Reconstruct the fan-out a session actually performed
+  4 fan-out(s), 10 agent(s), widest 5
+
+  graphlint 0.1.0  1 error(s), 4 warning(s), 0 info
+    ✗ correlated-verifiers: These two verifiers ask the same question (100% prompt overlap).
+    ! missing-schema: Agent "session" returns free text but its result feeds another step.
+      (a transcript does not record whether a subagent was given an output schema, so an
+       observed graph never has one to show)
+
+  preflight 0.1.0
+    agents    56 expected (41–116)
+    predicted $1.55 ($1.00–$3.74)
+    measured  $100.40
+```
+
+**Nothing here is reimplemented.** The spec goes out on stdin, the JSON comes
+back, and localflow renders what it is told — the same argument as soif. Three
+rules travel with it:
+
+- **Absent is absent, never clean.** A missing `graphlint` reports "not
+  installed", never "no findings". A linter that reports zero problems because
+  it never ran is the false clean this whole family argues against, and it is
+  the easiest one to ship by accident.
+- **A non-zero exit is an answer.** `graphlint check` exits 1 when a rule fires.
+  Reading exit codes as failure would discard exactly the runs worth reading.
+- **What the transcript cannot record is said out loud.** An observed graph has
+  no output schemas because a transcript does not record whether a subagent was
+  given one. graphlint correctly reports `missing-schema` on every node; that
+  finding is about localflow's input rather than about your session, and it
+  carries a note saying so instead of being filtered away behind your back.
+
+### The gap is the interesting number
+
+`predicted $1.55, measured $100.40` is not preflight being wrong. preflight's
+`worker` profile means *one unit of work* and defaults to 8k input; an
+interactive session's context is the whole conversation, and by call two hundred
+that is 332k. The two numbers are different quantities, and seeing them side by
+side is what tells you the profile needs measuring rather than guessing — which
+is what `localflow calibrate` writes.
+
+### What it will not ask decorrelate
+
+[decorrelate](https://github.com/Unchained-Labs/decorrelate) measures whether a
+panel of verifiers was actually independent, from their **verdicts**. localflow
+does not have verdicts. A transcript records which agents were issued and which
+returned a tool error; it does not record what any of them concluded, and an
+error is not a "no". So `decorrelate report` is not wired up, and the reason is
+printed rather than left as an absence you might read as an endorsement.
+
+What is wired up is the other verb. When a fan-out is caught asking one question
+three times, `decorrelate lenses` plans a set of deliberately different ones —
+and a plan needs no run data:
+
+```
+  decorrelate 0.1.0 — a generic lens plan for that panel
+    refute    opus-5    Try to refute this. Default to refuted if you are uncertain.
+    evidence  sonnet-5  Quote the exact span that supports this. Paraphrase is a rejection.
+    impact    haiku-4-5 If this is real, what breaks, for whom, and how would they notice?
+```
+
+It defaults to `generic` on purpose: decorrelate has domain-specific plans, and
+picking between them from a transcript would be localflow guessing what your
+session was for. Pass your own with `decorrelate lenses <domain>`.
+
+All three tools are optional. Each one absent is one section that says it is
+absent, and the rest of the board is unaffected:
+
+```sh
+npm i -g graphlint preflight decorrelate
+```
+
 ## Calibrating preflight
 
 [preflight](https://github.com/Unchained-Labs/preflight)'s `calibrate` replaces

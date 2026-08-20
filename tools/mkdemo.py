@@ -238,12 +238,19 @@ def steps_for(box) -> list[dict]:
             ("mid", "graphlint lints the graph you wrote."),
             ("big", "This is the one that ran."),
             ("mid", ""),
-            ("accent", "localflow graph 62173ece | graphlint check -"),
-            ("accent", "localflow graph 62173ece | preflight estimate -"),
+            ("accent", "localflow review 62173ece"),
             ("small", ""),
             ("small", "Shape is measured. Whether a barrier was needed is graphlint's question —"),
             ("small", "and now it has real graphs to ask it about."),
-        ], "hold": 4.2},
+        ], "hold": 3.8},
+
+        # Deliberately not in the GIF: it is a panel of prose, and prose at 640px
+        # is a grey texture. The video can hold it long enough to read.
+        {"shot": "family", "crop": box("family"), "hold": 5.2,
+         "title": "So hand it to the tools that judge graphs",
+         "sub": "graphlint lints it, preflight prices it, decorrelate plans the lenses that panel should have "
+                "used. Nothing is reimplemented here — and a tool that is not installed reports that it is "
+                "not installed, never that it found nothing."},
 
         {"shot": "reroute", "crop": box("reroute"), "hold": 3.8,
          "title": "Reroute: same conversation, a different model",

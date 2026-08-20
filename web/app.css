@@ -168,13 +168,102 @@ body { display: flex; flex-direction: column; }
 .note.warn { border-color: var(--ul-warn); }
 .note b { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-warn); display: block; margin-bottom: 2px; }
 .note.info b { color: var(--ul-muted); }
+/* The caveat that travels with a finding about what localflow could not see. */
+.note-aside { display: block; margin-top: 3px; font-size: 11.5px; color: var(--ul-faint); font-style: italic; }
+
+/* A diverse-lens plan: three deliberately different questions. */
+.lenses { display: flex; flex-direction: column; gap: 0.45rem; margin: 0.5rem 0; }
+.lens { border-left: 2px solid var(--ul-accent-dim); padding: 0.35rem 0 0.35rem 0.7rem; }
+.lens-head { display: flex; align-items: baseline; gap: 0.5rem; }
+.lens-key { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-accent); }
+.lens-model { font-family: var(--ul-font-mono, monospace); font-size: 10.5px; color: var(--ul-faint); }
+.lens-q { font-size: 12.5px; line-height: 1.5; color: var(--ul-body); margin-top: 2px; }
+.lens-oracle { font-size: 11.5px; color: var(--ul-faint); margin-top: 2px; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .hint { font-size: 12px; color: var(--ul-faint); line-height: 1.55; }
 
-svg.graph { width: 100%; height: auto; background: var(--ul-bg-inset, #0B0F13); border: 1px solid var(--ul-line); border-radius: 6px; }
-svg.graph text { font-family: var(--ul-font-mono, monospace); font-size: 5px; fill: var(--ul-body); }
-svg.graph text.small { font-size: 3.6px; fill: var(--ul-faint); }
+/* ---- the graph that ran --------------------------------------------------
+ *
+ * A rail with a node per group hanging off it. Everything is sized in real
+ * pixels: the previous version drew into a viewBox and let the container pick
+ * the scale, so type size was a function of drawer width and nothing lined up
+ * with the text around it.
+ */
+.dag {
+  background: var(--ul-bg-inset, #0B0F13);
+  border: 1px solid var(--ul-line);
+  border-radius: 8px;
+  padding: 0.85rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.dag-node {
+  position: relative;
+  padding: 0.5rem 0 0.5rem 1.15rem;
+  border-left: 1.5px solid var(--ul-line-strong);
+}
+/* The node's own dot on the rail. */
+.dag-node::before {
+  content: "";
+  position: absolute;
+  left: -4.75px; top: 0.85rem;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ul-line-strong);
+  border: 2px solid var(--ul-bg-inset, #0B0F13);
+}
+.dag-node.root::before { background: var(--ul-accent); }
+.dag-node.root { padding-top: 0.15rem; }
+
+.dag-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem; }
+.dag-phase {
+  font-family: var(--ul-font-mono, monospace);
+  font-size: 12px; color: var(--ul-heading); font-weight: 600;
+}
+.dag-width { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-faint); }
+.dag-tag {
+  font-family: var(--ul-font-mono, monospace);
+  font-size: 10px; letter-spacing: 0.02em;
+  padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--ul-line-strong); color: var(--ul-muted);
+}
+.dag-tag.bad { color: var(--ul-down); border-color: var(--ul-down); background: var(--ul-down-wash); }
+.dag-tag.warn { color: var(--ul-warn); border-color: var(--ul-warn); background: var(--ul-warn-wash); }
+
+/* The children, named. An anonymous dot said a fan-out was five wide without
+ * saying what any of the five were doing, which is the first thing anyone asks. */
+.dag-kids { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.4rem; }
+.dag-kid {
+  max-width: 100%;
+  font-size: 11px; line-height: 1.5;
+  padding: 2px 7px; border-radius: 5px;
+  background: var(--ul-bg-raised); border: 1px solid var(--ul-line);
+  color: var(--ul-body);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: default;
+}
+.dag-kid.bad { color: var(--ul-down); border-color: var(--ul-down); background: var(--ul-down-wash); }
+.dag-kid.more { color: var(--ul-faint); font-family: var(--ul-font-mono, monospace); }
+
+/* The gap between two groups, which is where the barrier lives. */
+.dag-join {
+  position: relative;
+  min-height: 0.55rem;
+  border-left: 1.5px solid var(--ul-line-strong);
+  display: flex; align-items: center; gap: 0.4rem;
+  padding-left: 1.15rem;
+}
+.dag-barrier {
+  font-family: var(--ul-font-mono, monospace);
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--ul-accent);
+  padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--ul-accent-dim); background: var(--ul-accent-wash);
+  cursor: default;
+}
+.dag-join-why { font-size: 11px; color: var(--ul-faint); line-height: 1.4; }
 
 /* ---- dialog ------------------------------------------------------------- */
 dialog {
