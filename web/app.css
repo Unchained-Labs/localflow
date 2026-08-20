@@ -185,85 +185,65 @@ body { display: flex; flex-direction: column; }
 
 /* ---- the graph that ran --------------------------------------------------
  *
- * A rail with a node per group hanging off it. Everything is sized in real
- * pixels: the previous version drew into a viewBox and let the container pick
- * the scale, so type size was a function of drawer width and nothing lined up
- * with the text around it.
+ * Drawn at 1:1 pixel units and never rescaled, so the type in the nodes is the
+ * size it says it is. When the widest layer does not fit, this scrolls: a
+ * diagram that shrank to fit would be back to unreadable labels, and one that
+ * clipped would be lying about how wide the fan-out got.
  */
 .dag {
   background: var(--ul-bg-inset, #0B0F13);
   border: 1px solid var(--ul-line);
   border-radius: 8px;
-  padding: 0.85rem 0.9rem;
-  display: flex;
-  flex-direction: column;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
+.dag-svg { display: block; }
 
-.dag-node {
-  position: relative;
-  padding: 0.5rem 0 0.5rem 1.15rem;
-  border-left: 1.5px solid var(--ul-line-strong);
-}
-/* The node's own dot on the rail. */
-.dag-node::before {
-  content: "";
-  position: absolute;
-  left: -4.75px; top: 0.85rem;
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: var(--ul-line-strong);
-  border: 2px solid var(--ul-bg-inset, #0B0F13);
-}
-.dag-node.root::before { background: var(--ul-accent); }
-.dag-node.root { padding-top: 0.15rem; }
+.dag-edge { fill: none; stroke: var(--ul-line-strong); stroke-width: 1.25px; }
 
-.dag-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem; }
-.dag-phase {
+/* The barrier that stood between two groups. */
+.dag-barrier-line { stroke: var(--ul-accent-dim); stroke-width: 2px; stroke-linecap: round; }
+
+.dag-n rect { fill: var(--ul-bg-raised); stroke: var(--ul-line); stroke-width: 1px; }
+.dag-n.root rect { stroke: var(--ul-accent-dim); }
+.dag-n.bad rect { fill: var(--ul-down-wash); stroke: var(--ul-down); }
+
+.dag-label {
+  font-family: var(--ul-font-body, system-ui), sans-serif;
+  font-size: 10.5px;
+  fill: var(--ul-body);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+.dag-n.root .dag-label { font-family: var(--ul-font-mono, monospace); fill: var(--ul-heading); font-size: 12px; }
+.dag-n.bad .dag-label { fill: var(--ul-down); }
+
+/* The graph, given the window. */
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.sec-head h4 { margin-bottom: 0.6rem; }
+.btn-quiet {
+  font-size: 11px; padding: 2px 8px; border-radius: 5px;
+  background: transparent; border: 1px solid var(--ul-line-strong); color: var(--ul-muted); cursor: pointer;
+}
+.btn-quiet:hover { color: var(--ul-heading); border-color: var(--ul-accent-dim); }
+
+dialog.graph-modal {
+  background: var(--ul-bg-raised); color: var(--ul-body);
+  border: 1px solid var(--ul-line); border-radius: var(--ul-radius-lg, 12px);
+  padding: 1rem; width: auto; max-width: 94vw; max-height: 92vh; overflow: auto;
+}
+dialog.graph-modal::backdrop { background: rgba(0,0,0,0.6); }
+.graph-modal-head { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 0.8rem; }
+.graph-modal-head strong { font-size: 14px; color: var(--ul-heading); font-weight: 600; }
+
+.dag-caption-bg { fill: var(--ul-bg-inset, #0B0F13); }
+.dag-caption {
   font-family: var(--ul-font-mono, monospace);
-  font-size: 12px; color: var(--ul-heading); font-weight: 600;
+  font-size: 10.5px;
+  fill: var(--ul-faint);
 }
-.dag-width { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-faint); }
-.dag-tag {
-  font-family: var(--ul-font-mono, monospace);
-  font-size: 10px; letter-spacing: 0.02em;
-  padding: 1px 6px; border-radius: 999px;
-  border: 1px solid var(--ul-line-strong); color: var(--ul-muted);
-}
-.dag-tag.bad { color: var(--ul-down); border-color: var(--ul-down); background: var(--ul-down-wash); }
-.dag-tag.warn { color: var(--ul-warn); border-color: var(--ul-warn); background: var(--ul-warn-wash); }
-
-/* The children, named. An anonymous dot said a fan-out was five wide without
- * saying what any of the five were doing, which is the first thing anyone asks. */
-.dag-kids { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.4rem; }
-.dag-kid {
-  max-width: 100%;
-  font-size: 11px; line-height: 1.5;
-  padding: 2px 7px; border-radius: 5px;
-  background: var(--ul-bg-raised); border: 1px solid var(--ul-line);
-  color: var(--ul-body);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  cursor: default;
-}
-.dag-kid.bad { color: var(--ul-down); border-color: var(--ul-down); background: var(--ul-down-wash); }
-.dag-kid.more { color: var(--ul-faint); font-family: var(--ul-font-mono, monospace); }
-
-/* The gap between two groups, which is where the barrier lives. */
-.dag-join {
-  position: relative;
-  min-height: 0.55rem;
-  border-left: 1.5px solid var(--ul-line-strong);
-  display: flex; align-items: center; gap: 0.4rem;
-  padding-left: 1.15rem;
-}
-.dag-barrier {
-  font-family: var(--ul-font-mono, monospace);
-  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--ul-accent);
-  padding: 1px 6px; border-radius: 999px;
-  border: 1px solid var(--ul-accent-dim); background: var(--ul-accent-wash);
-  cursor: default;
-}
-.dag-join-why { font-size: 11px; color: var(--ul-faint); line-height: 1.4; }
+.dag-caption.panel { fill: var(--ul-warn); }
 
 /* ---- dialog ------------------------------------------------------------- */
 dialog {
