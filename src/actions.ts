@@ -54,6 +54,8 @@ export interface HeadlessResult {
   modelUsage?: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number; costUSD: number }>;
   permission_denials?: unknown[];
   terminal_reason?: string;
+  /** The model's final text. What a workflow carries into the next node. */
+  result?: string;
 }
 
 function bin(ctx: ActionContext): string {
@@ -129,6 +131,30 @@ export async function spawnAgent(req: SpawnRequest, ctx: ActionContext = {}): Pr
       });
     });
   });
+}
+
+/**
+ * Start a session and wait for it.
+ *
+ * The blocking counterpart to `spawnAgent`, and the primitive a workflow runs
+ * on. `--bg` returns the moment a session registers and never reports that it
+ * finished, so a graph built on it could not have dependencies — you cannot
+ * wait for something that never tells you it is done. Headless blocks, reports
+ * the `session_id` it created, and reports what the CLI itself says the turn
+ * cost, so a finished node carries a measured figure rather than an estimate.
+ *
+ * The session it starts is a normal one: it writes a transcript, so it lands on
+ * the board like any other and can be opened, priced and graphed afterwards.
+ */
+export async function runHeadless(req: SpawnRequest, ctx: ActionContext = {}): Promise<ActionResult> {
+  const bad = checkPrompt(req.prompt) ?? checkCwd(req.cwd, ctx);
+  if (bad) return { ok: false, action: "run", detail: bad };
+
+  const args = ["-p", req.prompt, "--output-format", "json"];
+  if (req.model) args.push("--model", req.model);
+  if (req.effort) args.push("--effort", req.effort);
+  if (req.agent) args.push("--agent", req.agent);
+  return await headless("run", args, "", req.cwd, ctx);
 }
 
 /**

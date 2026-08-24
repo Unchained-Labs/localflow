@@ -318,6 +318,8 @@ dialog .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
 
 .metrics { display: none; padding: var(--ul-space-4); gap: var(--ul-space-4); flex-direction: column; }
 body[data-view="metrics"] .metrics { display: flex; }
+body[data-view="workflows"] .workflows { display: grid; }
+body[data-view="workflows"] .board { display: none; }
 body[data-view="metrics"] .board,
 body[data-view="sessions"] .board { display: none; }
 .sessions { display: none; padding: var(--ul-space-4); }
@@ -411,3 +413,75 @@ body[data-view="sessions"] .sessions { display: block; }
 .dev-sessions li { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .18rem 0; }
 .dev-attach { font-size: .8em; color: var(--fg-muted); background: var(--surface-2, transparent);
               padding: .1rem .35rem; border-radius: 3px; user-select: all; }
+
+
+/* ---- workflows -----------------------------------------------------------
+ *
+ * Three columns: what exists, what it looks like, and what the selected node
+ * is. The canvas uses the same shapes as the observed graph in the drawer —
+ * a workflow and the run it produced are the same kind of object, and drawing
+ * them differently would suggest otherwise.
+ */
+.workflows { display: none; grid-template-columns: 15rem 1fr 20rem; gap: 1px; background: var(--ul-line); height: calc(100vh - 58px); }
+.workflows > * { background: var(--ul-bg); overflow-y: auto; padding: 0.9rem; }
+
+.wf-list .blurb { overflow-wrap: anywhere; font-size: 11px; }
+.wf-list-head { display: flex; align-items: center; justify-content: space-between; }
+.wf-list-head h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); }
+.wf-item { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; width: 100%; text-align: left; margin-top: 0.3rem; padding: 0.45rem 0.6rem; border-radius: 6px; background: var(--ul-bg-raised); border: 1px solid var(--ul-line); color: var(--ul-body); cursor: pointer; font: inherit; }
+.wf-item:hover { border-color: var(--ul-accent-dim); }
+.wf-item.on { border-color: var(--ul-accent); }
+.wf-item-name { font-family: var(--ul-font-mono, monospace); font-size: 12px; color: var(--ul-heading); }
+.wf-item-n { font-size: 11px; color: var(--ul-faint); }
+.wf-item-bad { font-size: 11px; color: var(--ul-down); }
+
+.wf-main { display: flex; flex-direction: column; padding: 0; }
+.wf-bar { display: flex; align-items: center; gap: 0.5rem; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--ul-line); }
+.wf-bar strong { font-family: var(--ul-font-mono, monospace); font-size: 13px; color: var(--ul-heading); }
+.wf-spacer { flex: 1; }
+.wf-status { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-faint); }
+.wf-status.running { color: var(--ul-accent); }
+.wf-status.failed, .wf-status.refused { color: var(--ul-down); }
+.wf-status.done { color: var(--ul-up); }
+
+.wf-canvas { flex: 1; overflow: auto; padding: 0.9rem; background: var(--ul-bg-inset, #0B0F13); }
+.wf-svg { display: block; margin: 0 auto; }
+
+.wf-edge { fill: none; stroke: var(--ul-line-strong); stroke-width: 1.5px; }
+.wf-edge.barrier { stroke: var(--ul-accent-dim); }
+.wf-arrow { fill: var(--ul-line-strong); }
+
+.wf-n rect { fill: var(--ul-bg-raised); stroke: var(--ul-line); stroke-width: 1px; }
+.wf-n { cursor: pointer; }
+.wf-n:hover rect { stroke: var(--ul-accent-dim); }
+.wf-n.sel rect { stroke: var(--ul-accent); stroke-width: 1.5px; }
+.wf-n.running rect { stroke: var(--ul-accent); fill: var(--ul-accent-wash); }
+.wf-n.done rect { stroke: var(--ul-up); }
+.wf-n.failed rect { stroke: var(--ul-down); fill: var(--ul-down-wash); }
+.wf-n.skipped rect { stroke-dasharray: 3 3; }
+
+.wf-id { font-family: var(--ul-font-mono, monospace); font-size: 12px; fill: var(--ul-heading); }
+.wf-meta { font-family: var(--ul-font-mono, monospace); font-size: 10px; fill: var(--ul-faint); }
+.wf-prompt { font-family: var(--ul-font-body, system-ui), sans-serif; font-size: 10px; fill: var(--ul-muted); }
+
+.wf-report { border-top: 1px solid var(--ul-line); padding: 0.6rem 0.9rem; max-height: 8rem; overflow-y: auto; }
+.wf-line { font-size: 12px; line-height: 1.55; padding: 1px 0; color: var(--ul-body); }
+.wf-line.ok { color: var(--ul-body); }
+.wf-line.warn { color: var(--ul-warn); }
+.wf-line.bad { color: var(--ul-down); }
+
+.wf-field { display: block; margin-top: 0.7rem; }
+.wf-field > span { display: block; font-size: 11px; color: var(--ul-faint); margin-bottom: 0.25rem; }
+.wf-field input, .wf-field textarea, .wf-field select {
+  width: 100%; background: var(--ul-bg-inset, #0B0F13); color: var(--ul-body);
+  border: 1px solid var(--ul-line); border-radius: 6px; padding: 0.4rem 0.5rem;
+  font-family: var(--ul-font-mono, monospace); font-size: 11.5px;
+}
+.wf-actions { display: flex; gap: 0.4rem; }
+.btn-quiet.danger { color: var(--ul-down); border-color: var(--ul-down); margin-top: 0.9rem; }
+.wf-runinfo { margin-top: 1rem; border-top: 1px solid var(--ul-line); padding-top: 0.6rem; }
+.wf-runinfo h4 { margin: 0 0 0.4rem; font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); }
+.wf-runline { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-muted); padding: 1px 0; }
+.wf-runline.failed { color: var(--ul-down); }
+.wf-runline.done { color: var(--ul-up); }
+.wf-runline.skipped { color: var(--ul-faint); }

@@ -34,6 +34,18 @@ import { Board } from "./board.js";
 import type { BoardOptions } from "./board.js";
 import { notesFor, observedSpec } from "./graph.js";
 import { NO_VERDICTS, estimateGap, estimateObserved, lensPlan, lintObserved } from "./family.js";
+import {
+  budgetGate,
+  familySpec,
+  lintGate,
+  listWorkflows,
+  readWorkflow,
+  runWorkflow,
+  saveWorkflow,
+  validate as validateWorkflow,
+  workflowsDir,
+} from "./workflow.js";
+import type { RunEvent, RunState, WorkflowSpec } from "./workflow.js";
 import { otterTasks, otterUrl } from "./otter.js";
 import { summarise } from "./board.js";
 import { AdapterRegistry } from "./agents/registry.js";
@@ -112,6 +124,18 @@ export class LocalflowServer {
   private latest: BoardSummary | null = null;
   private lastError: string | null = null;
   private readonly registry = new AdapterRegistry();
+
+  /**
+   * Runs this process started, newest last.
+   *
+   * In memory: a run is a live thing with a stream attached, and it belongs to
+   * the process that is doing it. The sessions it creates are on disk like any
+   * others, so what survives a restart is the work rather than the bookkeeping.
+   */
+  private readonly runs = new Map<string, RunState>();
+
+  /** Listeners on /api/workflows/runs/events, one per open canvas. */
+  private readonly runWatchers = new Set<ServerResponse>();
   private adapterStatus: AdapterStatus[] = [];
   private sourcesError: string | undefined;
   private timer: NodeJS.Timeout | null = null;
@@ -305,6 +329,33 @@ export class LocalflowServer {
       });
     }
 
+    // ---- workflows -------------------------------------------------------
+    //
+    // Reading is always allowed; running is not. Composing a graph is editing a
+    // file, and starting one is starting a fleet of sessions, so the second
+    // sits behind --allow-actions with every other verb that spends money.
+
+    if (url.pathname === "/api/workflows") {
+      return send(res, 200, { workflows: listWorkflows(), dir: workflowsDir() });
+    }
+
+    if (url.pathname === "/api/workflows/runs") {
+      return send(res, 200, { runs: [...this.runs.values()].sort((a, b) => b.startedAt - a.startedAt) });
+    }
+
+    if (url.pathname === "/api/workflows/runs/events") return this.streamRuns(req, res);
+
+    const wf = /^\/api\/workflows\/([^/]+)$/.exec(url.pathname);
+    if (wf && req.method === "GET") {
+      const spec = readWorkflow(decodeURIComponent(wf[1]!));
+      if (!spec) return send(res, 404, { error: "no such workflow" });
+      return send(res, 200, { spec, problems: validateWorkflow(spec, this.actionCtx()) });
+    }
+
+    if (url.pathname.startsWith("/api/workflows/")) {
+      return await this.workflowAction(url.pathname, req, res);
+    }
+
     if (url.pathname.startsWith("/api/actions/")) return await this.action(url.pathname, req, res);
 
     if (url.pathname === "/api/pricing/reload") {
@@ -332,6 +383,112 @@ export class LocalflowServer {
     res.write(`data: ${JSON.stringify(this.latest ?? { error: this.lastError })}\n\n`);
     this.clients.add(res);
     req.on("close", () => this.clients.delete(res));
+  }
+
+  /** The context every action and workflow is held to. */
+  private actionCtx(): ActionContext {
+    return { allowedRoots: this.opts.allowedRoots, bin: this.opts.bin };
+  }
+
+  /**
+   * Run progress, as it happens.
+   *
+   * The board already streams; this is a second, much quieter stream carrying
+   * only node state changes, so a canvas can light up without re-polling a run
+   * that may be spending money for twenty minutes.
+   */
+  private streamRuns(req: IncomingMessage, res: ServerResponse): void {
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    res.write(": open\n\n");
+    this.runWatchers.add(res);
+    req.on("close", () => this.runWatchers.delete(res));
+  }
+
+  private publishRun(e: RunEvent): void {
+    const frame = `data: ${JSON.stringify(e)}\n\n`;
+    for (const w of this.runWatchers) {
+      try {
+        w.write(frame);
+      } catch {
+        this.runWatchers.delete(w);
+      }
+    }
+  }
+
+  /** Save, validate, estimate, run. Everything that changes or spends. */
+  private async workflowAction(pathname: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const m = /^\/api\/workflows\/([^/]+)\/([a-z]+)$/.exec(pathname);
+    const rest = pathname.slice("/api/workflows/".length);
+
+    let body: Record<string, unknown> = {};
+    if (req.method === "POST" || req.method === "PUT") {
+      try {
+        body = await readJson(req);
+      } catch (e) {
+        return send(res, 400, { error: (e as Error).message });
+      }
+    }
+
+    // PUT /api/workflows/<name> — save.
+    if (!m && req.method === "PUT") {
+      const spec = body as unknown as WorkflowSpec;
+      if (spec?.name !== decodeURIComponent(rest)) {
+        return send(res, 400, { error: "the workflow's name and the path must agree" });
+      }
+      const problems = validateWorkflow(spec, this.actionCtx());
+      // Saved even when it does not validate: a draft you cannot save is a
+      // draft you lose. Running is where the problems become refusals.
+      const saved = saveWorkflow(spec);
+      return send(res, saved.ok ? 200 : 400, { ...saved, problems });
+    }
+
+    if (!m) return send(res, 404, { error: "no such endpoint" });
+
+    const name = decodeURIComponent(m[1]!);
+    const verb = m[2];
+    const spec = readWorkflow(name);
+    if (!spec) return send(res, 404, { error: "no such workflow" });
+
+    if (verb === "check") {
+      // What the family says, before a token is spent. Both gates report what
+      // they decided even when they let it past.
+      const [problems, lint, budget] = await Promise.all([
+        Promise.resolve(validateWorkflow(spec, this.actionCtx())),
+        lintGate(spec),
+        budgetGate(spec),
+      ]);
+      return send(res, 200, { problems, lint, budget, spec: familySpec(spec) });
+    }
+
+    if (verb === "run") {
+      if (!this.opts.allowActions) {
+        return send(res, 403, {
+          error:
+            "running a workflow starts Claude Code sessions, and actions are off. " +
+            "Restart localflow with --allow-actions.",
+        });
+      }
+      const runId = `run-${Date.now().toString(36)}`;
+      // Answer immediately and let it run: a workflow is minutes of work, and
+      // an HTTP request held open for it would time out somewhere in between.
+      void runWorkflow(spec, {
+        ...this.actionCtx(),
+        runId,
+        force: body.force === true,
+        maxConcurrent: typeof body.maxConcurrent === "number" ? body.maxConcurrent : undefined,
+        onEvent: (e) => {
+          if (e.type === "run") this.runs.set(e.run.id, e.run);
+          this.publishRun(e);
+        },
+      }).then((final) => this.runs.set(final.id, final));
+      return send(res, 202, { runId, detail: "started; watch /api/workflows/runs/events" });
+    }
+
+    return send(res, 404, { error: "no such endpoint" });
   }
 
   private async action(pathname: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
