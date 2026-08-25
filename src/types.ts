@@ -190,6 +190,23 @@ export interface Task {
   transcriptPath?: string;
   /** Set when the task is live in the registry but has no transcript we could read. */
   transcriptMissing?: boolean;
+  /**
+   * The declared device this session is running on. Absent means this machine.
+   *
+   * Absent rather than `"local"` on purpose: a board that labels every card with
+   * a machine name is a board where the machine name stops being information.
+   */
+  device?: string;
+  /** The session id as the far side knows it — `id` is prefixed with the device. */
+  remoteId?: string;
+  /**
+   * Set when only the tail of the transcript was mirrored, so `usage` and
+   * `costUsd` are floors rather than totals. Rendering a floor as a total is the
+   * same defect as pricing an unknown model at zero.
+   */
+  partial?: boolean;
+  /** Set while this card is the last known state of a device we cannot currently reach. */
+  staleSince?: number;
 }
 
 export interface BoardSummary {

@@ -31,7 +31,10 @@ npx localflow board           # the same thing, in the terminal
 ```
 
 Nothing is sent anywhere. There is no daemon to install, no config, and no
-account — the data is already on your disk, localflow just reads it.
+account — the data is already on your disk, localflow just reads it. The one
+exception is a machine you explicitly declare and explicitly ask it to watch, and
+even then it connects over your own ssh to a host you named. See
+[Devices](#devices-and-sessions-that-survive-the-train-tunnel).
 
 ## What it shows
 
@@ -585,6 +588,73 @@ says which one is missing rather than failing opaquely. Note this only keeps the
 *process* alive -- Claude Code's Remote Control has a network timeout of its own,
 and nothing here changes that.
 
+### Watching them, not just firing into them
+
+Starting work on a machine you cannot then see is half a feature. `--watch-remote`
+puts every declared device's sessions on the same board as the local ones, in the
+same lanes, with the same token counts and the same price:
+
+```
+localflow --watch-remote
+```
+
+```
+  running (4)
+
+    @spark Audit the billing routes and open a PR with the fixes
+      billing-audit · sonnet-5 · 133k out · $7.76 · 83% cached · 4m
+```
+
+It is a **separate flag from `--allow-remote`**, both off by default, because
+they are different things to agree to. Watching copies transcripts here;
+spawning starts processes there. Either without the other is a reasonable thing
+to want -- a build box you fire work at but do not want mirrored, a fleet you
+only ever read -- and a device can opt out of the board alone with
+`"monitor": false`.
+
+**The transcript is mirrored, not summarised.** Each device's transcripts are
+copied incrementally into `~/.localflow/mirror/<device>/` and then parsed by
+exactly the same reader as a local one. The alternative -- running a summariser
+on the far side -- means a second implementation of the counting rules in
+`transcript.ts`, and a cost that is right locally and quietly wrong remotely is
+worse than no remote support at all.
+
+That does mean **another machine's prompts end up on this disk**. It is why this
+is its own flag, why the mirror directory is created `0700`, and why
+`/api/health` tells you where it is.
+
+The conversation is two ssh calls per device per poll, not one per session: a
+manifest (the registry, and a stat of every transcript), then one framed stream
+carrying the bytes that were appended to the files that actually grew. Nothing
+changed means nothing transferred. Connections are multiplexed, so steady-state
+polls reuse one handshake, and devices are polled on their own timer -- one
+asleep laptop must not hold up the local board for its `ConnectTimeout`.
+
+Four things it will not do:
+
+**A machine that stops answering does not empty its lane.** Its cards stay, faded
+and dashed, each labelled `unreachable · last seen 4m ago`. The session did not
+stop existing when the lid closed, and a board that deletes cards on a dropped
+connection teaches you to distrust the board.
+
+**A partial mirror is never priced as a whole one.** The first sync of a very
+large transcript takes its tail rather than surprising you with the transfer, and
+those cards are marked `cost is a floor` -- the same rule that makes an unpriced
+model read `cost unknown` rather than `$0.00`.
+
+**What comes back from a device is not trusted.** Session ids and paths are the
+one input here we did not write. They are checked against a strict pattern and
+confined to the root we asked about before they are quoted into anything, and the
+framed stream is read by declared byte count, so a transcript containing the
+frame marker cannot desynchronise the reader. Both are tested by executing the
+generated script against a real shell.
+
+**Two machines cannot merge.** A card's identity includes its device, so the same
+session id on a cloned home directory stays two cards rather than one card with
+both costs added together. `reprompt`, `reroute` and `stop` refuse a remote card
+by name: they act on this machine, and resuming an id that is not here would
+either fail confusingly or match the wrong session.
+
 ## Safety
 
 This process can start Claude Code sessions on your machine, and a page on the
@@ -648,7 +718,7 @@ lives somewhere unusual.
 ## Development
 
 ```sh
-pnpm install && pnpm build && pnpm test   # 62 tests
+pnpm install && pnpm build && pnpm test   # 216 tests
 node dist/src/cli.js board
 node dist/src/cli.js --allow-actions
 ```

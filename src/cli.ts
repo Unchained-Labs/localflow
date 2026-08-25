@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /** localflow CLI: serve the board, print it, or export what a session actually ran. */
-import { Board } from "./board.js";
+import { Board, summarise } from "./board.js";
+import { devicesPath, loadDevices } from "./devices.js";
+import { Fleet, mirrorRoot } from "./mirror.js";
 import { notesFor, observedSpec } from "./graph.js";
 import { PRICING_VERIFIED, pricingAgeDays } from "./pricing.js";
 import { LocalflowServer } from "./server.js";
@@ -36,6 +38,12 @@ OPTIONS
                            ~/.localflow/devices.json, over ssh, inside tmux so a
                            dropped connection cannot kill it. Off by default, and
                            separate from --allow-actions on purpose.
+  --watch-remote           also show the sessions running on every machine in
+                           ~/.localflow/devices.json. Read-only, and separate from
+                           --allow-remote: watching copies those machines'
+                           transcripts to ~/.localflow/mirror so they can be priced
+                           by the same reader as local ones. Off by default.
+  --remote-poll MS         how often devices are polled (default 10000)
   --allow-root PATH        restrict spawn to a directory (repeatable)
   --history N              ended sessions to keep on the board (default 10)
   --tokens                 also write per-call token counts from calibrate. Off by
@@ -214,6 +222,20 @@ async function main(): Promise<number> {
     } catch (e) {
       console.error(`localflow: ${(e as Error).message}`);
       return 2;
+    }
+
+    // One-shot commands honour --watch-remote too. A flag that worked for the
+    // server and was silently ignored by `localflow board` would be worse than
+    // not having it: you would read a fleet-wide total that was one machine's.
+    if (argv.includes("--watch-remote")) {
+      const { devices, error: devErr } = loadDevices();
+      const fleet = new Fleet({ history: common.history, asOf: common.asOf });
+      fleet.sync(devices);
+      const polls = await fleet.poll();
+      const remote = polls.flatMap((p) => p.tasks);
+      const degraded = [...summary.degraded, ...polls.flatMap((p) => p.degraded)];
+      if (devErr) degraded.push({ id: "devices", reason: devErr });
+      summary = summarise([...summary.tasks, ...remote], degraded, common.asOf);
     }
 
     if (cmd === "water") {
@@ -423,6 +445,8 @@ async function main(): Promise<number> {
     host,
     allowActions: argv.includes("--allow-actions"),
     allowRemote: argv.includes("--allow-remote"),
+    watchRemote: argv.includes("--watch-remote"),
+    remotePollMs: Number(flag(argv, "--remote-poll") ?? 10_000),
     allowedRoots: flags(argv, "--allow-root"),
     pollMs: Number(flag(argv, "--poll") ?? 2000),
   });
@@ -436,6 +460,17 @@ async function main(): Promise<number> {
       ? "  actions enabled — this can start Claude sessions"
       : "  read-only — pass --allow-actions to spawn, reprompt, reroute or stop",
   );
+  if (argv.includes("--watch-remote")) {
+    const { devices, error } = loadDevices();
+    const watched = devices.filter((d) => d.monitor !== false);
+    console.log(
+      watched.length
+        ? `  watching ${watched.length} device(s): ${watched.map((d) => d.name).join(", ")}` +
+            ` — their transcripts are mirrored to ${mirrorRoot()}`
+        : `  --watch-remote is on but no device in ${devicesPath()} is monitored`,
+    );
+    if (error) console.log(`  ! ${error}`);
+  }
   if (host !== "127.0.0.1" && host !== "localhost") {
     console.log(`  ! bound to ${host}, not loopback. Anyone who can reach this port can read your transcripts.`);
   }

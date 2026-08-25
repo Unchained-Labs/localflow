@@ -121,14 +121,37 @@ body { display: flex; flex-direction: column; }
 .card.dragging { opacity: 0.45; }
 .card.otter { border-left: 2px solid var(--ul-accent); }
 
+/* A card from another machine. The rail is the same device the Otter cards use
+   because it answers the same question — "this did not come from here" — and a
+   second visual idiom for the same idea would just be more to learn. */
+.card.remote { border-left: 2px solid var(--ul-accent-dim); }
+
+/* Last known state of a machine that is not answering. Faded rather than hidden:
+   the session did not stop existing when the laptop closed its lid, and a lane
+   that empties on a dropped connection teaches you not to trust the lane. */
+.card.stale { opacity: 0.62; border-style: dashed; }
+.card.stale:hover { opacity: 1; }
+
 .card h3 {
   margin: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35;
   color: var(--ul-heading);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* The machine, inline before the title so it reads as part of the sentence
+   rather than as a badge floating over it. */
+.card h3 .on {
+  font-family: var(--ul-font-mono, monospace); font-size: 10.5px; font-weight: 500;
+  color: var(--ul-accent); background: var(--ul-accent-wash);
+  border-radius: 4px; padding: 0.05rem 0.3rem; margin-right: 0.35rem;
+  vertical-align: 0.08em; white-space: nowrap;
+}
 .meta { display: flex; flex-wrap: wrap; gap: 0.3rem 0.55rem; font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-muted); }
 .meta .cost { color: var(--ul-heading); }
 .meta .unknown { color: var(--ul-faint); font-style: italic; }
+/* Sits next to the number it qualifies. A floor shown as a total, or a lane
+   position that stopped being true ten minutes ago, is the kind of quiet wrong
+   answer this board exists to not give. */
+.meta .warn { color: var(--ul-warn); }
 .sub { font-family: var(--ul-font-mono, monospace); font-size: 10.5px; color: var(--ul-faint); word-break: break-all; line-height: 1.5; }
 .sub .err, .sub .queued { white-space: nowrap; }
 /* Amber, not red. A tool_result with is_error is routine — a grep that matched
@@ -407,8 +430,12 @@ body[data-view="sessions"] .sessions { display: block; }
 .dev-dot { width: .55rem; height: .55rem; border-radius: 50%; flex: 0 0 auto; align-self: center; }
 .dev-dot.ok { background: var(--ok, #199e70); }
 .dev-dot.off { background: var(--muted, #6b7280); }
+/* Nothing has asked this machine anything yet, which is not the same as off. */
+.dev-dot.unknown { background: transparent; box-shadow: inset 0 0 0 1px var(--ul-faint); }
 .dev-host { color: var(--fg-muted); font-size: .85em; }
 .dev-why { color: var(--fg-muted); font-size: .85em; font-style: italic; }
+.dev-watch { color: var(--ul-accent); font-family: var(--ul-font-mono, monospace); font-size: .8em; }
+.dev-watch.off { color: var(--ul-faint); font-style: italic; }
 .dev-sessions { list-style: none; margin: .4rem 0 0; padding: 0 0 0 1.05rem; }
 .dev-sessions li { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .18rem 0; }
 .dev-attach { font-size: .8em; color: var(--fg-muted); background: var(--surface-2, transparent);
@@ -485,3 +512,34 @@ body[data-view="sessions"] .sessions { display: block; }
 .wf-runline.failed { color: var(--ul-down); }
 .wf-runline.done { color: var(--ul-up); }
 .wf-runline.skipped { color: var(--ul-faint); }
+
+
+/* ---- fleet bar ----------------------------------------------------------
+ *
+ * Only rendered when there is more than one machine on the board. A filter with
+ * a single option is furniture: it takes a row of the screen to tell you what
+ * you already knew.
+ *
+ * The counts are on the chips because the question a fleet view answers is
+ * "where is the work" — a row of bare machine names makes you click each one to
+ * find that out. A machine whose every card is stale is dimmed, so you can see
+ * that it has gone quiet without filtering to it first.
+ */
+.fleet {
+  display: flex; flex-wrap: wrap; gap: 0.35rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--ul-bg-raised);
+  border-bottom: 1px solid var(--ul-line);
+}
+.fchip {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  font-family: var(--ul-font-mono, monospace); font-size: 11px;
+  color: var(--ul-muted); background: var(--ul-bg-raised);
+  border: 1px solid var(--ul-line); border-radius: 999px;
+  padding: 0.2rem 0.6rem; cursor: pointer;
+}
+.fchip:hover { border-color: color-mix(in srgb, var(--ul-accent) 55%, var(--ul-line)); }
+.fchip:focus-visible { outline: 2px solid var(--ul-accent); outline-offset: 2px; }
+.fchip.on { color: var(--ul-on-accent); background: var(--ul-accent); border-color: var(--ul-accent); }
+.fchip.stale { opacity: 0.6; border-style: dashed; }
+.fchip .n { color: inherit; opacity: 0.7; }
