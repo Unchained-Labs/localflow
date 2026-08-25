@@ -20,6 +20,8 @@ USAGE
   localflow board                  print the board once and exit
   localflow graph <sessionId>      the graph that session actually ran, as a spec
   localflow review <sessionId>     lint and price that graph, via graphlint and preflight
+  localflow workflows              the workflows in ~/.localflow/workflows
+  localflow run <workflow>         run one, after linting and pricing it first
   localflow calibrate              the measured cache hit rate, for preflight.json
   localflow sessions [query]       every session on this machine, not just recent ones
   localflow tasks <sessionId>      that session's task list
@@ -55,6 +57,70 @@ EXAMPLE
   localflow graph f60740f7-4bda-4e90-9fd3-dbf03403068e | graphlint check -
   localflow review f60740f7          # the same pipe, both tools, one command
 `;
+
+/**
+ * `workflows` and `run`.
+ *
+ * Separate from the board commands because neither needs a board: a workflow is
+ * a file, and running one starts its own sessions rather than steering the ones
+ * already here. `run` prints what the gates decided before it starts, because
+ * "it is running" is the wrong first thing to learn about a fleet you are paying for.
+ */
+async function workflowCommand(cmd: string, argv: string[], format: string): Promise<number> {
+  const { listWorkflows, readWorkflow, runWorkflow, workflowsDir } = await import("./workflow.js");
+
+  if (cmd === "workflows") {
+    const rows = listWorkflows();
+    if (format === "json") {
+      process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+      return 0;
+    }
+    if (!rows.length) {
+      process.stdout.write(`\n  no workflows in ${workflowsDir()}\n\n`);
+      return 0;
+    }
+    process.stdout.write(`\n  ${rows.length} workflow(s) in ${workflowsDir()}\n\n`);
+    for (const r of rows) {
+      const detail = r.error ? `unreadable — ${r.error}` : `${r.spec?.nodes.length ?? 0} node(s)`;
+      process.stdout.write(`  ${r.name.padEnd(22)} ${detail}\n`);
+    }
+    process.stdout.write("\n");
+    return 0;
+  }
+
+  const name = argv.slice(1).find((a) => !a.startsWith("-"));
+  if (!name) {
+    console.error("usage: localflow run <workflow> [--force] [--allow-root PATH]");
+    return 2;
+  }
+  const spec = readWorkflow(name);
+  if (!spec) {
+    console.error(`localflow: no workflow called "${name}" in ${workflowsDir()}`);
+    return 2;
+  }
+
+  const run = await runWorkflow(spec, {
+    allowedRoots: flags(argv, "--allow-root"),
+    force: argv.includes("--force"),
+    maxConcurrent: flag(argv, "--concurrency") ? Number(flag(argv, "--concurrency")) : undefined,
+    onEvent: (e) => {
+      if (format === "json" || e.type !== "node") return;
+      const n = e.node;
+      const where = `${n.id}${n.index === undefined ? "" : ` #${n.index + 1}`}`;
+      if (n.state === "running") process.stderr.write(`  → ${where}\n`);
+      else process.stderr.write(`  ${n.state === "done" ? "✓" : n.state === "failed" ? "✗" : "·"} ${where}${n.detail ? ` — ${n.detail}` : ""}\n`);
+    },
+  });
+
+  if (format === "json") {
+    process.stdout.write(`${JSON.stringify(run, null, 2)}\n`);
+  } else {
+    process.stdout.write(`\n  ${run.state}${run.detail ? ` — ${run.detail}` : ""}\n`);
+    if (run.costUsd !== null) process.stdout.write(`  the CLI reported $${run.costUsd.toFixed(4)} across ${run.nodes.length} run(s)\n`);
+    process.stdout.write("\n");
+  }
+  return run.state === "done" ? 0 : 1;
+}
 
 function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -134,6 +200,8 @@ async function main(): Promise<number> {
     process.stderr.write(`\n  ${c.completed}/${c.total} done, ${c.in_progress} in progress\n`);
     return 0;
   }
+
+  if (cmd === "workflows" || cmd === "run") return await workflowCommand(cmd, argv, format);
 
   if (
     cmd === "board" || cmd === "graph" || cmd === "review" ||

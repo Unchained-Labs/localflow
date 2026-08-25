@@ -547,15 +547,41 @@ const registry = sessions
 write(
   join(out, "bin/claude"),
   `#!/bin/sh
-# The registry, as \`claude agents --json\` prints it. Nothing else is answered:
-# a shim that pretended to start sessions would be filming a promise.
-case "$1 $2" in
-  "agents --json") cat <<'JSON'
+# Two things only: the registry, and a headless turn.
+#
+# \`agents --json\` prints the rows below. \`-p ... --output-format json\` is what
+# a workflow node runs, so the fixture answers it with the shape the real CLI
+# returns — a session id, a cost, and some output text — which is what makes a
+# workflow runnable on a machine that has no Claude Code on it. It does no work
+# and says so in its own output; anything else is refused, because a shim that
+# pretended to start a real session would be filming a promise.
+case "$1" in
+  agents)
+    case "$2" in
+      --json) cat <<'JSON'
 ${JSON.stringify(registry, null, 2)}
 JSON
-  ;;
-  *) echo "fixture claude: refusing '$*'" >&2; exit 64 ;;
+        exit 0 ;;
+    esac ;;
+  -p)
+    prompt=$2
+    id=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \\n' || echo 0000000000000000)
+    cat <<JSON
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "session_id": "fixture-$id",
+  "num_turns": 1,
+  "duration_ms": 1200,
+  "total_cost_usd": 0.0731,
+  "result": "[fixture] no work was done. The prompt began: $(printf '%s' "$prompt" | tr -d '\\\\"\\n\\r\\t' | head -c 60)"
+}
+JSON
+    exit 0 ;;
 esac
+echo "fixture claude: refusing '$*'" >&2
+exit 64
 `,
 );
 chmodSync(join(out, "bin/claude"), 0o755);

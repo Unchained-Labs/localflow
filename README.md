@@ -379,6 +379,76 @@ absent, and the rest of the board is unaffected:
 npm i -g graphlint preflight decorrelate
 ```
 
+## Workflows: the graph you write
+
+Everything above is instrumentation — it watches a fleet and reconstructs what
+it did. This is the other half: a graph you compose, that localflow runs.
+
+```sh
+localflow workflows          # what is in ~/.localflow/workflows
+localflow run audit          # lint it, price it, then run it
+```
+
+Or the **Workflows** tab: pick one, see it as a graph, click a node to edit its
+prompt, model, effort, directory and fan-out width, then check, save and run it
+while the nodes light up.
+
+A workflow is a `*.graph.json` — **the same document graphlint lints and
+preflight prices**, with the fields execution needs added to each node. That is
+the whole reason the format is shared: you can lint and price a fleet before it
+spends a token, using the tools that already do those jobs.
+
+```json
+{
+  "name": "audit",
+  "cwd": "~/work/billing",
+  "budget": { "usd": 12 },
+  "nodes": [
+    { "id": "scope",  "prompt": "List every billing route and what authorises it.", "model": "sonnet" },
+    { "id": "verify", "prompt": "Given:\n{{input}}\n\nLens {{index}} of {{width}}: find one authorisation gap.",
+      "model": "opus", "fanout": { "over": "agents", "width": 3 } },
+    { "id": "report", "prompt": "Write the findings up as a PR description:\n{{input}}" }
+  ],
+  "edges": [
+    { "from": "scope",  "to": "verify", "barrier": true, "barrierReason": "the panel needs the route list" },
+    { "from": "verify", "to": "report", "barrier": true, "barrierReason": "the write-up waits for every lens" }
+  ]
+}
+```
+
+**One node is one `claude -p --output-format json` run.** `--bg` returns the
+moment a session registers and never reports that it finished, so a graph built
+on it could not have dependencies — you cannot wait for something that never
+says it is done. Headless blocks, reports the `session_id` it created, and
+reports what the CLI itself says the turn cost, so a finished node carries a
+**measured** figure. The sessions it starts are normal sessions: they land on
+the board, and can be opened, priced and graphed afterwards like any other.
+
+Edges are dependencies. `{{input}}` is replaced by the output of the nodes a
+node depends on, and that substitution is the only data flow there is — what you
+read in the prompt is what was sent.
+
+### What it refuses
+
+- **A node whose dependency failed is `skipped`, never `completed`**, and the
+  run names the upstream node that did it. Rolling a skip up as success is how
+  an orchestrator tells you it did work it did not do.
+- **One failed child fails its node.** Downstream asked for that node's output;
+  a partial panel is not the thing it asked for.
+- **Cycles are refused before anything starts**, with the loop named.
+- **Every directory goes through the same allowed-roots check as spawn.** A
+  workflow is a file, and a file that could name any directory would make
+  `--allow-root` decorative.
+- **graphlint errors and a blown preflight budget stop the run** — overridable
+  with `--force`, which still prints what the gate said.
+- **An absent tool skips its gate and says so.** Everywhere else in this repo a
+  false clean costs you a wrong number; here it costs you a fleet of agents
+  doing the wrong thing.
+
+Running is behind `--allow-actions`, like every other verb that starts a
+session. Reading and editing a workflow is not — composing a graph is editing a
+file.
+
 ## Calibrating preflight
 
 [preflight](https://github.com/Unchained-Labs/preflight)'s `calibrate` replaces
