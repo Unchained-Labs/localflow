@@ -38,6 +38,14 @@ export interface Device {
   bin?: string;
   /** Working directory for sessions started there. */
   cwd?: string;
+  /** The Claude Code state directory there, when it is not `$HOME/.claude`. */
+  home?: string;
+  /**
+   * Set false to keep a device out of the board while still being able to start
+   * work on it. Monitoring copies that machine's transcripts onto this disk, so
+   * a device you spawn into but do not want mirrored is a real thing to want.
+   */
+  monitor?: boolean;
 }
 
 export interface DevicesFile {
@@ -105,7 +113,15 @@ export function loadDevices(path = devicesPath()): LoadedDevices {
       continue;
     }
     seen.add(d.name);
-    good.push({ name: d.name, host: d.host, user: d.user, bin: d.bin, cwd: d.cwd });
+    good.push({
+      name: d.name,
+      host: d.host,
+      user: d.user,
+      bin: d.bin,
+      cwd: d.cwd,
+      home: d.home,
+      monitor: d.monitor,
+    });
   }
 
   return {

@@ -44,7 +44,12 @@ function card(t: Task): string[] {
   // grep that matched nothing, a command that exited 1 — so flagging it made
   // every card on a healthy board look broken. The count goes in the detail line
   // where it is information rather than an alarm.
-  out.push(`    ${bold(title)}`);
+  // The machine goes in front of the title, not into the detail line: on a
+  // fleet board "which box is this on" is the first thing you need in order to
+  // read anything else on the card, and a local session stays unlabelled so the
+  // label keeps meaning something.
+  const where = t.device ? `${cyan(`@${t.device}`)} ` : "";
+  out.push(`    ${where}${bold(title)}`);
 
   const bits = [
     grey(t.name),
@@ -53,6 +58,10 @@ function card(t: Task): string[] {
     t.costUsd !== null ? grey(money(t.costUsd)) : grey("cost unknown"),
     t.cacheHitRate !== null ? grey(`${Math.round(t.cacheHitRate * 100)}% cached`) : "",
     grey(age(t.updatedAt)),
+    // A floor is not a total, and a card that pulled only the tail of its
+    // transcript must not show its cost as if it were the whole bill.
+    t.partial ? yellow("partial — cost is a floor") : "",
+    t.staleSince ? yellow(`last seen ${age(t.staleSince)} ago — device unreachable`) : "",
   ].filter(Boolean);
   out.push(`      ${bits.join(grey(" · "))}`);
 
@@ -116,7 +125,13 @@ export function renderBoard(
 
   if (b.degraded.length) {
     out.push(`  ${yellow("!")} ${dim(`${b.degraded.length} card(s) are showing less than the full picture:`)}`);
-    for (const d of b.degraded.slice(0, 5)) out.push(`     ${grey(`${d.id.slice(0, 8)}  ${d.reason}`)}`);
+    for (const d of b.degraded.slice(0, 5)) {
+      // A whole-device note is about a machine, not a session, so it is labelled
+      // with the machine. Truncating "device:studio" to eight characters gave
+      // "device:s", which named nothing.
+      const label = d.id.startsWith("device:") ? `@${d.id.slice("device:".length)}` : d.id.slice(0, 8);
+      out.push(`     ${grey(`${label}  ${d.reason}`)}`);
+    }
     out.push("");
   }
 

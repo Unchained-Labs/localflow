@@ -57,6 +57,8 @@ import { pricingPath, stalenessDays } from "./providers.js";
 import { sourcesPath } from "./agents/jsonl.js";
 import { findDevice, loadDevices, devicesPath } from "./devices.js";
 import { killSession, listSessions as listRemoteSessions, probeDevice, startSession } from "./remote.js";
+import { Fleet, mirrorRoot } from "./mirror.js";
+import type { DevicePoll } from "./mirror.js";
 import { listSessions } from "./sessions.js";
 import { countTasks, createTask, readTasks, setTaskStatus } from "./tasks.js";
 import type { TaskStatus } from "./tasks.js";
@@ -80,6 +82,18 @@ export interface ServerOptions extends BoardOptions {
    * into the first would grant it to everyone who wanted the first.
    */
   allowRemote?: boolean;
+  /**
+   * Read the sessions on every monitored device and show them on the board.
+   *
+   * Deliberately not folded into allowRemote. Starting a process on another
+   * machine and copying that machine's transcripts onto this disk are different
+   * things to consent to, and either without the other is a reasonable thing to
+   * want: a build box you fire work at but do not want mirrored, or a fleet you
+   * only ever watch. Both default off.
+   */
+  watchRemote?: boolean;
+  /** How often devices are polled. Much slower than the local loop: ssh is not a readSync. */
+  remotePollMs?: number;
 }
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
@@ -138,6 +152,18 @@ export class LocalflowServer {
   private readonly runWatchers = new Set<ServerResponse>();
   private adapterStatus: AdapterStatus[] = [];
   private sourcesError: string | undefined;
+
+  /**
+   * The monitored machines.
+   *
+   * Polled on its own timer rather than inside the board loop, because one
+   * device behind a `ConnectTimeout` would otherwise stall every local card
+   * for eight seconds. The board merges whatever the last device poll left
+   * here, which may be a few seconds old and says so.
+   */
+  private readonly fleet: Fleet;
+  private devicePolls: DevicePoll[] = [];
+  private fleetTimer: NodeJS.Timeout | null = null;
   private timer: NodeJS.Timeout | null = null;
   private http: Server | null = null;
 
@@ -148,12 +174,20 @@ export class LocalflowServer {
     // a restart, which is the right cost for a file that changes about as often
     // as you install a new agent CLI.
     this.sourcesError = this.registry.addDeclared().error;
+    this.fleet = new Fleet({ history: opts.history, asOf: opts.asOf });
   }
 
   async start(): Promise<{ url: string }> {
+    if (this.opts.watchRemote) await this.pollFleet();
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), this.opts.pollMs);
     this.timer.unref?.();
+
+    if (this.opts.watchRemote) {
+      const every = this.opts.remotePollMs ?? 10_000;
+      this.fleetTimer = setInterval(() => void this.pollFleet(), every);
+      this.fleetTimer.unref?.();
+    }
 
     this.http = createServer((req, res) => void this.route(req, res));
     await new Promise<void>((r) => this.http!.listen(this.opts.port, this.opts.host, r));
@@ -162,6 +196,7 @@ export class LocalflowServer {
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    if (this.fleetTimer) clearInterval(this.fleetTimer);
     for (const c of this.clients) c.end();
     this.clients.clear();
     await new Promise<void>((r) => (this.http ? this.http.close(() => r()) : r()));
@@ -170,6 +205,28 @@ export class LocalflowServer {
   /** The current board, for tests and for the CLI's one-shot mode. */
   get snapshot(): BoardSummary | null {
     return this.latest;
+  }
+
+  /**
+   * One pass over the monitored devices.
+   *
+   * devices.json is re-read every pass, so adding a machine is an edit rather
+   * than a restart -- the opposite call from sources.json, because a fleet
+   * changes when someone opens a laptop and an installed CLI does not.
+   *
+   * Never throws: an unreachable device is the normal case, and it comes back
+   * as a card marked stale rather than as an exception that would take the
+   * local board down with it.
+   */
+  private async pollFleet(): Promise<void> {
+    try {
+      const { devices } = loadDevices();
+      this.fleet.sync(devices);
+      this.devicePolls = await this.fleet.poll();
+    } catch (e) {
+      this.devicePolls = [];
+      this.lastError = `device poll failed: ${(e as Error).message}`;
+    }
   }
 
   private async refresh(): Promise<void> {
@@ -195,6 +252,19 @@ export class LocalflowServer {
           summarise([...summary.tasks, ...extra.tasks], summary.degraded, this.opts.asOf),
         );
       }
+      // Whatever the last device poll produced. Merged exactly like Otter and
+      // the declared adapters: a card from another machine is a card.
+      if (this.opts.watchRemote && this.devicePolls.length) {
+        const remoteTasks = this.devicePolls.flatMap((p) => p.tasks);
+        for (const p of this.devicePolls) summary.degraded.push(...p.degraded);
+        if (remoteTasks.length) {
+          Object.assign(
+            summary,
+            summarise([...summary.tasks, ...remoteTasks], summary.degraded, this.opts.asOf),
+          );
+        }
+      }
+
       this.latest = summary;
       this.lastError = null;
     } catch (e) {
@@ -235,7 +305,19 @@ export class LocalflowServer {
         error: this.lastError,
         actions: Boolean(this.opts.allowActions),
         remote: Boolean(this.opts.allowRemote),
+        watchRemote: Boolean(this.opts.watchRemote),
         devicesPath: devicesPath(),
+        // Named because it holds other machines' prompts. A copy you cannot
+        // find is a copy you cannot delete.
+        mirrorPath: this.opts.watchRemote ? mirrorRoot() : null,
+        devices: this.devicePolls.map((p) => ({
+          name: p.device,
+          reachable: p.reachable,
+          error: p.error,
+          syncedAt: p.syncedAt,
+          staleSince: p.staleSince,
+          cards: p.tasks.length,
+        })),
         sessions: this.latest?.totals.sessions ?? 0,
         otter: otterUrl(this.opts) ?? null,
         adapters: this.adapterStatus,
@@ -513,6 +595,19 @@ export class LocalflowServer {
     const id = typeof body.sessionId === "string" ? body.sessionId : "";
     const task = id ? this.findTask(id) : undefined;
 
+    // Every verb below resumes or signals a process on *this* machine. A card
+    // from a watched device names a session that is not here, and `claude
+    // --resume studio:abc` would either fail confusingly or, worse, match a
+    // local session that happened to share the id. Refusing by name is the
+    // honest answer, and it names what would be needed instead.
+    if (task?.device && verb !== "spawn") {
+      return send(res, 409, {
+        error:
+          `${task.remoteId ?? id} is running on ${task.device}, not on this machine. ` +
+          "localflow watches a device read-only; steering a session there means doing it there.",
+      });
+    }
+
     switch (verb) {
       case "spawn":
         return send(res, 200, await spawnAgent(
@@ -635,27 +730,57 @@ export class LocalflowServer {
    *
    * Probed concurrently and never fatally: a laptop that is asleep is the normal
    * case, not an error, and one unreachable machine must not empty the panel.
+   *
+   * The tmux probe only runs when starting work is actually permitted. It costs
+   * a round trip per device and answers a question -- "could I launch here?" --
+   * that a board in watch-only mode has no business asking.
    */
   private async devices(res: ServerResponse): Promise<void> {
-    if (!this.opts.allowRemote) {
-      return send(res, 200, { enabled: false, devices: [], path: devicesPath() });
+    const canStart = Boolean(this.opts.allowRemote);
+    const watching = Boolean(this.opts.watchRemote);
+    if (!canStart && !watching) {
+      return send(res, 200, { enabled: false, canStart: false, watching: false, devices: [], path: devicesPath() });
     }
     const { devices, error } = loadDevices();
+    const polls = new Map(this.devicePolls.map((p) => [p.device, p]));
+
     const rows = await Promise.all(
       devices.map(async (d) => {
-        const [probe, sessions] = await Promise.all([probeDevice(d), listRemoteSessions(d)]);
+        const poll = polls.get(d.name);
+        const [probe, sessions] = canStart
+          ? await Promise.all([probeDevice(d), listRemoteSessions(d)])
+          : [undefined, undefined];
+
+        // Reachability, in descending order of how recently it was established.
+        // A device we are watching has been reached within a poll interval; one
+        // we only spawn on has just been probed; a device that is neither has
+        // told us nothing, and `null` says so rather than guessing "off".
+        const reachable = probe ? probe.ok : (poll?.reachable ?? null);
         return {
           name: d.name,
           host: d.host,
-          reachable: probe.ok,
-          detail: probe.ok ? "" : (probe.error ?? "unreachable"),
-          tmux: probe.value?.tmux ?? false,
-          claude: probe.value?.bin ?? false,
-          sessions: sessions.value ?? [],
+          reachable,
+          detail: probe && !probe.ok ? (probe.error ?? "unreachable") : (poll?.error ?? ""),
+          tmux: probe?.value?.tmux ?? false,
+          claude: probe?.value?.bin ?? false,
+          sessions: sessions?.value ?? [],
+          // Monitoring, which is a different question from "can I start work here".
+          monitored: watching && d.monitor !== false,
+          cards: poll?.tasks.length ?? 0,
+          syncedAt: poll?.syncedAt ?? null,
+          staleSince: poll?.staleSince ?? null,
         };
       }),
     );
-    return send(res, 200, { enabled: true, devices: rows, path: devicesPath(), error: error ?? null });
+    return send(res, 200, {
+      enabled: true,
+      canStart,
+      watching,
+      devices: rows,
+      path: devicesPath(),
+      mirror: watching ? mirrorRoot() : null,
+      error: error ?? null,
+    });
   }
 
   private static(pathname: string, res: ServerResponse): void {

@@ -54,6 +54,13 @@ interface Task {
   toolErrors: number;
   fanouts: Fanout[];
   transcriptPath?: string;
+  /** The declared device this ran on. Absent means this machine. */
+  device?: string;
+  remoteId?: string;
+  /** Only the tail of the transcript was mirrored: tokens and cost are floors. */
+  partial?: boolean;
+  /** Last known state of a device that is not answering right now. */
+  staleSince?: number;
 }
 
 /**
@@ -230,13 +237,39 @@ function toast(msg: string, kind: "ok" | "err" | "info" = "info", ms = 6000): vo
 
 // ---- rendering --------------------------------------------------------------
 
+/**
+ * The header numbers.
+ *
+ * Recomputed from the visible cards when a machine filter is on, rather than
+ * showing the server's fleet-wide totals. A header reading $104 above a lane
+ * filtered to one laptop is not a rounding problem, it is the wrong number:
+ * whatever the board is showing, the totals are the totals *of that*.
+ */
 function renderTotals(b: Board): void {
-  const u = b.totals.usage;
+  const rows = fleetFilter === null ? null : b.tasks.filter((t) => (t.device ?? "") === fleetFilter);
+
+  let sessions = b.totals.sessions;
+  let out = b.totals.usage.output;
+  let cost = b.totals.costUsd;
+  let hit = b.totals.cacheHitRate;
+
+  if (rows) {
+    sessions = rows.length;
+    out = rows.reduce((a, t) => a + t.usage.output, 0);
+    // Null, not zero, when nothing in view has a price — the same rule the
+    // server follows, for the same reason.
+    const priced = rows.filter((t) => t.costUsd !== null);
+    cost = priced.length ? priced.reduce((a, t) => a + (t.costUsd ?? 0), 0) : null;
+    const read = rows.reduce((a, t) => a + t.usage.cacheRead, 0);
+    const fresh = rows.reduce((a, t) => a + t.usage.input, 0);
+    hit = read + fresh > 0 ? read / (read + fresh) : null;
+  }
+
   const cells: [string, string][] = [
-    [String(b.totals.sessions), "sessions"],
-    [tokens(u.output), "output tokens"],
-    [money(b.totals.costUsd), "spent"],
-    [b.totals.cacheHitRate === null ? "—" : `${Math.round(b.totals.cacheHitRate * 100)}%`, "from cache"],
+    [String(sessions), rows ? `sessions on ${fleetFilter || "this machine"}` : "sessions"],
+    [tokens(out), "output tokens"],
+    [money(cost), "spent"],
+    [hit === null ? "—" : `${Math.round(hit * 100)}%`, "from cache"],
   ];
   const host = $("#totals");
   host.replaceChildren(
@@ -245,11 +278,22 @@ function renderTotals(b: Board): void {
 }
 
 function card(t: Task): HTMLElement {
-  const c = el("article", { class: `card${t.source === "otter" ? " otter" : ""}`, tabIndex: 0 });
+  const cls = ["card"];
+  if (t.source === "otter") cls.push("otter");
+  if (t.device) cls.push("remote");
+  if (t.staleSince) cls.push("stale");
+  const c = el("article", { class: cls.join(" "), tabIndex: 0 });
   c.dataset.id = t.id;
+  if (t.device) c.dataset.device = t.device;
   c.draggable = true;
 
-  c.append(el("h3", {}, t.title));
+  // The machine leads the title. On a fleet board it is the fact that makes
+  // every other fact on the card mean something, and a local session stays
+  // unlabelled so that a label keeps being worth reading.
+  const h = el("h3");
+  if (t.device) h.append(el("span", { class: "on" }, t.device));
+  h.append(t.title);
+  c.append(h);
 
   const meta = el("div", { class: "meta" });
   meta.append(el("span", {}, t.name));
@@ -262,6 +306,11 @@ function card(t: Task): HTMLElement {
   );
   if (t.cacheHitRate !== null) meta.append(el("span", {}, `${Math.round(t.cacheHitRate * 100)}% cached`));
   meta.append(el("span", {}, age(t.updatedAt)));
+  // Two ways a remote card can be less than it looks, both stated on the card
+  // rather than only in the degraded strip, because the number they qualify is
+  // right here next to them.
+  if (t.partial) meta.append(el("span", { class: "warn", title: "only the tail of this transcript was mirrored" }, "cost is a floor"));
+  if (t.staleSince) meta.append(el("span", { class: "warn" }, `unreachable · last seen ${age(t.staleSince)} ago`));
   c.append(meta);
 
   const sub = el("div", { class: "sub" });
@@ -290,14 +339,81 @@ function card(t: Task): HTMLElement {
   return c;
 }
 
+/**
+ * Which machine's cards to show. Null is "all of them".
+ *
+ * Held here rather than in the URL on purpose: it is a way of looking at a live
+ * board, not a place you would send someone.
+ */
+let fleetFilter: string | null = null;
+
+/** Every machine with a card on the current board, this one first. */
+function machines(b: Board): string[] {
+  const seen = new Set<string>();
+  for (const t of b.tasks) seen.add(t.device ?? "");
+  return [...seen].sort((a, x) => (a === "" ? -1 : x === "" ? 1 : a.localeCompare(x)));
+}
+
+/**
+ * The fleet bar.
+ *
+ * Counts sit on the chips because the question a fleet view answers is "where
+ * is the work", and a row of names without numbers makes you click each one to
+ * find out. A machine whose cards are all stale says so on its chip, so you can
+ * see that a machine has gone quiet without first filtering to it.
+ */
+function renderFleet(b: Board): void {
+  const bar = $("#fleet");
+  const names = machines(b);
+  if (names.length < 2) {
+    // One machine is not a fleet. Keep the filter off rather than showing a
+    // control whose only setting is the one you are already looking at.
+    bar.hidden = true;
+    if (fleetFilter !== null) fleetFilter = null;
+    return;
+  }
+  bar.hidden = false;
+  bar.textContent = "";
+
+  const chip = (key: string | null, label: string, n: number, stale: boolean) => {
+    const b2 = el("button", {
+      class: `fchip${fleetFilter === key ? " on" : ""}${stale ? " stale" : ""}`,
+      type: "button",
+    });
+    b2.append(label, el("span", { class: "n" }, String(n)));
+    b2.addEventListener("click", () => {
+      fleetFilter = fleetFilter === key ? null : key;
+      if (board) {
+        renderTotals(board);
+        renderBoard(board);
+      }
+    });
+    bar.append(b2);
+  };
+
+  chip(null, "all", b.tasks.length, false);
+  for (const name of names) {
+    const rows = b.tasks.filter((t) => (t.device ?? "") === name);
+    chip(
+      name || "",
+      name || "this machine",
+      rows.length,
+      rows.length > 0 && rows.every((t) => t.staleSince),
+    );
+  }
+}
+
 function renderBoard(b: Board): void {
   const host = $("#board");
   const existing = new Map<string, HTMLElement>();
   host.querySelectorAll<HTMLElement>(".card").forEach((c) => existing.set(c.dataset.id!, c));
 
+  renderFleet(b);
+  const shown = fleetFilter === null ? b.tasks : b.tasks.filter((t) => (t.device ?? "") === fleetFilter);
+
   host.replaceChildren(
     ...LANES.map(({ lane, label, blurb }) => {
-      const inLane = b.tasks.filter((t) => t.lane === lane);
+      const inLane = shown.filter((t) => t.lane === lane);
       const body = el("div", { class: "lane-body" });
       if (!inLane.length) body.append(el("p", { class: "empty" }, blurb));
       for (const t of inLane) {
@@ -325,7 +441,9 @@ function renderBoard(b: Board): void {
 
   const deg = $("#degraded");
   if (b.degraded.length) {
-    deg.textContent = `${b.degraded.length} card(s) incomplete — ${b.degraded.map((d) => `${d.id.slice(0, 8)}: ${d.reason}`).join("; ")}`;
+    deg.textContent = `${b.degraded.length} note(s) — ${b.degraded
+      .map((d) => `${d.id.startsWith("device:") ? `@${d.id.slice("device:".length)}` : d.id.slice(0, 8)}: ${d.reason}`)
+      .join("; ")}`;
     deg.hidden = false;
   } else {
     deg.hidden = true;
@@ -858,6 +976,17 @@ function actionButtons(t: Task): HTMLElement {
   }
   if (t.source === "otter") {
     return el("p", { class: "hint" }, "This is an Otter job. localflow shows it but does not drive it.");
+  }
+  if (t.device) {
+    // Watching a machine and steering it are different grants, and this board
+    // only has the first. Saying where the session is beats a button that
+    // resumes the wrong thing.
+    return el(
+      "p",
+      { class: "hint" },
+      `This session is on ${t.device}. localflow watches that machine read-only — ` +
+        "reprompt, reroute and stop act on this one, so they are not offered here.",
+    );
   }
 
   const reprompt = el("button", { class: "btn primary" }, "Reprompt");
@@ -1665,17 +1794,34 @@ interface DeviceSession {
 interface DeviceRow {
   name: string;
   host: string;
-  reachable: boolean;
+  /** Null when nothing has asked this machine anything yet — not the same as "off". */
+  reachable: boolean | null;
   detail: string;
   tmux: boolean;
   claude: boolean;
   sessions: DeviceSession[];
+  monitored: boolean;
+  cards: number;
+  syncedAt: number | null;
+  staleSince: number | null;
+}
+
+interface DevicesResponse {
+  enabled: boolean;
+  /** --allow-remote: work may be started on these machines. */
+  canStart: boolean;
+  /** --watch-remote: their sessions are on the board. */
+  watching: boolean;
+  devices: DeviceRow[];
+  path: string;
+  mirror: string | null;
+  error: string | null;
 }
 
 async function renderDevices(): Promise<void> {
   const section = $("#devices");
   const body = $("#dev-body");
-  let data: { enabled: boolean; devices: DeviceRow[]; path: string; error: string | null };
+  let data: DevicesResponse;
   try {
     data = await (await fetch("/api/devices")).json();
   } catch {
@@ -1702,19 +1848,36 @@ async function renderDevices(): Promise<void> {
     const row = el("div", { className: "dev-row" });
     const head = el("div", { className: "dev-head" });
 
-    const dot = el("span", { className: `dev-dot ${d.reachable ? "ok" : "off"}` });
+    const dot = el("span", {
+      className: `dev-dot ${d.reachable === null ? "unknown" : d.reachable ? "ok" : "off"}`,
+    });
     const name = el("strong");
     name.textContent = d.name;
     const host = el("span", { className: "dev-host" });
     host.textContent = d.host;
     head.append(dot, name, host);
 
-    if (!d.reachable) {
+    // What this machine is to us. Watching and spawning are separate grants, so
+    // a device can legitimately be one, the other, both, or neither, and the
+    // row has to be able to say which.
+    if (data.watching) {
+      const watch = el("span", { className: `dev-watch${d.monitored ? "" : " off"}` });
+      watch.textContent = !d.monitored
+        ? "not monitored"
+        : d.staleSince
+          ? `${d.cards} card(s), last synced ${age(d.staleSince)} ago`
+          : d.syncedAt
+            ? `${d.cards} card(s) on the board`
+            : "not synced yet";
+      head.append(watch);
+    }
+
+    if (d.reachable === false) {
       // Asleep is the ordinary state of a laptop. Say what ssh said and move on.
       const why = el("span", { className: "dev-why" });
       why.textContent = d.detail || "unreachable";
       head.append(why);
-    } else if (!d.tmux || !d.claude) {
+    } else if (d.reachable === true && data.canStart && (!d.tmux || !d.claude)) {
       // Reachable but not equipped: name the missing piece, since the fix is a
       // one-line install on that machine rather than anything to do here.
       const missing = [!d.tmux && "tmux", !d.claude && "claude"].filter(Boolean).join(" and ");
@@ -1750,7 +1913,10 @@ async function renderDevices(): Promise<void> {
         list.append(li);
       }
       row.append(list);
-    } else if (d.reachable) {
+    } else if (d.reachable && data.canStart) {
+      // Only claimable when we actually asked. In watch-only mode the tmux list
+      // is never fetched, and "no sessions started from here" would be a claim
+      // about something this board did not look at.
       const none = el("p", { className: "blurb" });
       none.textContent = "no sessions started from here";
       row.append(none);

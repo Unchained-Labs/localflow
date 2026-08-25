@@ -31,7 +31,13 @@
   </div>
 </header>
 
-<main id="board" class="board" aria-label="Agent sessions on this machine"></main>
+<!--
+  The fleet bar. Hidden entirely on a machine that watches no others: a filter
+  with one option is furniture, not a control.
+-->
+<nav id="fleet" class="fleet" aria-label="Filter by machine" hidden></nav>
+
+<main id="board" class="board" aria-label="Agent sessions across the fleet"></main>
 
 <section id="workflows" class="workflows" aria-label="Workflows">
   <aside class="wf-list">
