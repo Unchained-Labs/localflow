@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 /** localflow CLI: serve the board, print it, or export what a session actually ran. */
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Board, summarise } from "./board.js";
 import { devicesPath, loadDevices } from "./devices.js";
 import { Fleet, mirrorRoot } from "./mirror.js";
@@ -33,6 +35,10 @@ USAGE
 OPTIONS
   --port N                 default 7317
   --host ADDR              default 127.0.0.1. Anything else exposes this to your network.
+  --public-port N          the port the browser will use, when it differs from --port
+                           (a container published on another port, or a proxy). The
+                           Host check still refuses the right machine on the wrong
+                           port; this says which port is the right one.
   --allow-actions          permit spawn / reprompt / reroute / stop. Off by default.
   --allow-remote           permit starting Claude on a machine listed in
                            ~/.localflow/devices.json, over ssh, inside tmux so a
@@ -143,8 +149,16 @@ function flags(argv: string[], name: string): string[] {
   return out;
 }
 
-async function main(): Promise<number> {
-  const argv = process.argv.slice(2);
+/**
+ * The whole CLI, as a function of its arguments.
+ *
+ * `argv` is a parameter and the module only runs itself when it is the process
+ * entry point, so a test can call this directly. Previously `main` read
+ * `process.argv` itself and invoked on import, which meant importing this file
+ * ran the program — and that is why the largest file in the project had no
+ * tests at all.
+ */
+export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(HELP);
     return 0;
@@ -442,6 +456,7 @@ async function main(): Promise<number> {
   const server = new LocalflowServer({
     ...common,
     port: Number(flag(argv, "--port") ?? 7317),
+    publicPort: flag(argv, "--public-port") ? Number(flag(argv, "--public-port")) : undefined,
     host,
     allowActions: argv.includes("--allow-actions"),
     allowRemote: argv.includes("--allow-remote"),
@@ -492,12 +507,16 @@ function pickTask(tasks: Task[], id: string | undefined): Task | undefined {
   );
 }
 
-main().then(
-  (code) => {
-    if (code !== undefined) process.exitCode = code;
-  },
-  (e) => {
-    console.error(`localflow: ${(e as Error).message}`);
-    process.exitCode = 1;
-  },
-);
+// Only when run as the program, so importing this module for a test does not
+// start a server.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(
+    (code) => {
+      if (code !== undefined) process.exitCode = code;
+    },
+    (e) => {
+      console.error(`localflow: ${(e as Error).message}`);
+      process.exitCode = 1;
+    },
+  );
+}

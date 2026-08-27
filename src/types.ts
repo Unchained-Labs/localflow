@@ -216,4 +216,6 @@ export interface BoardSummary {
   /** Sessions the registry lists that we could not enrich, and why. */
   degraded: { id: string; reason: string }[];
   generatedAt: number;
+  /** Vintage of the built-in price table these costs were derived from. */
+  pricingVerified: string;
 }

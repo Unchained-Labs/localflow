@@ -107,6 +107,22 @@ body { display: flex; flex-direction: column; }
 
 .empty { color: var(--ul-faint); font-size: 12.5px; padding: 0.9rem 0.3rem; line-height: 1.5; }
 
+/*
+  Sessions with nothing readable in the transcript. One line, deliberately not a
+  card: they are real sessions and stay counted in the lane header, but they have
+  nothing to say and should not claim the space of one that does.
+*/
+.bare {
+  color: var(--ul-faint);
+  font-size: 12px;
+  font-style: italic;
+  padding: 0.55rem 0.7rem;
+  margin-top: 0.35rem;
+  border: 1px dashed var(--ul-line);
+  border-radius: var(--ul-radius-md, 8px);
+  line-height: 1.45;
+}
+
 /* ---- card --------------------------------------------------------------- */
 .card {
   background: var(--ul-bg-raised);

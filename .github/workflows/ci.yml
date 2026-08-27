@@ -136,3 +136,18 @@ jobs:
 
           echo "ok  read-only by default, cross-origin refused, Host checked, traversal blocked"
           kill %1 2>/dev/null || true
+
+          # --public-port: behind a proxy or a published container port, the port
+          # the browser names is not the port we listen on. The check still
+          # refuses the wrong port — it just has to be told which one is right.
+          node dist/src/cli.js --port 7398 --public-port 7400 > /tmp/lf-proxy.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf -m 1 -H 'Host: localhost:7400' http://127.0.0.1:7398/api/health >/dev/null && break; sleep 1; done
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost:7400' http://127.0.0.1:7398/api/health)
+          [ "$code" = "200" ] || { echo "::error::declared public port was not accepted (got $code)"; exit 1; }
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost:7398' http://127.0.0.1:7398/api/health)
+          [ "$code" = "403" ] || { echo "::error::a port other than the declared one was accepted (got $code)"; exit 1; }
+
+          echo "ok  --public-port accepted, other ports still refused"
+          kill %1 2>/dev/null || true
