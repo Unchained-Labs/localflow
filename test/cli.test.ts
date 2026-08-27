@@ -81,15 +81,26 @@ describe("arguments that cannot be satisfied", () => {
 });
 
 describe("--format json", () => {
-  it("emits parseable JSON for sessions", async () => {
+  // These run wherever the suite runs: a developer machine with a live Claude
+  // registry, and CI with none at all. An unreachable registry is deliberately
+  // an error rather than an empty result — the behaviour job asserts that
+  // separately — so the contract under test is "JSON when it can answer, a
+  // usable error when it cannot", never a traceback either way.
+  it("emits parseable JSON for sessions, which reads directories not the registry", async () => {
     expect(await main(["sessions", "--format", "json", "--limit", "1"])).toBe(0);
     expect(() => JSON.parse(stdout())).not.toThrow();
   });
 
-  it("emits parseable JSON for metrics", async () => {
-    expect(await main(["metrics", "--format", "json"])).toBe(0);
-    const parsed = JSON.parse(stdout());
-    expect(parsed).toBeTypeOf("object");
+  it("either answers metrics as JSON or says why it cannot", async () => {
+    const code = await main(["metrics", "--format", "json"]);
+    if (code === 0) {
+      expect(JSON.parse(stdout())).toBeTypeOf("object");
+    } else {
+      expect(code).toBe(2);
+      // Something a reader can act on, not a stack trace.
+      expect(stderr().trim()).not.toBe("");
+      expect(stderr()).not.toContain("    at ");
+    }
   });
 
   it("keeps the session count off stdout so the rows can be piped", async () => {
