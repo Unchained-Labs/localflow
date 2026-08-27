@@ -94,6 +94,15 @@ export interface ServerOptions extends BoardOptions {
   watchRemote?: boolean;
   /** How often devices are polled. Much slower than the local loop: ssh is not a readSync. */
   remotePollMs?: number;
+  /**
+   * The port the browser will name in `Host`, when that is not the port we
+   * listen on — a container published as `7400:7317`, or a reverse proxy.
+   *
+   * The Host check deliberately refuses the right machine on the wrong port,
+   * and that stays true; this only says which port is the right one. Defaults
+   * to the listen port, so a direct run is unchanged.
+   */
+  publicPort?: number;
 }
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
@@ -290,10 +299,11 @@ export class LocalflowServer {
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
-    if (!hostAllowed(req.headers.host, this.opts.port)) {
+    const expectedPort = this.opts.publicPort ?? this.opts.port;
+    if (!hostAllowed(req.headers.host, expectedPort)) {
       return send(res, 403, { error: "refused: Host header is not this machine (possible DNS rebinding)" });
     }
-    if (!originAllowed(req.headers.origin, this.opts.port)) {
+    if (!originAllowed(req.headers.origin, expectedPort)) {
       return send(res, 403, { error: `refused: cross-origin request from ${req.headers.origin}` });
     }
 

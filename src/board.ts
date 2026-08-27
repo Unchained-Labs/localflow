@@ -7,7 +7,7 @@
  * steady-state polling costs almost nothing regardless of how long the sessions
  * have been running.
  */
-import { costOf } from "./pricing.js";
+import { costOf, PRICING_VERIFIED } from "./pricing.js";
 import { cacheHitRate } from "./transcript.js";
 import { TranscriptCache, endedSessionIds, findTranscript, liveSessions, toTask } from "./claude.js";
 import type { AdapterOptions } from "./claude.js";
@@ -131,6 +131,9 @@ export function summarise(
     },
     degraded,
     generatedAt: Date.now(),
+    // The vintage of the built-in price table. A cost figure without it is a
+    // number the reader cannot date, and the board shows a running total.
+    pricingVerified: PRICING_VERIFIED,
   };
 }
 

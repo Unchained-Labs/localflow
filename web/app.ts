@@ -157,6 +157,7 @@ interface Board {
   totals: { usage: Usage; costUsd: number | null; sessions: number; cacheHitRate: number | null };
   degraded: { id: string; reason: string }[];
   generatedAt: number;
+  pricingVerified?: string;
   error?: string;
 }
 
@@ -182,6 +183,17 @@ function tokens(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
   return String(n);
+}
+
+/**
+ * True when a session yielded nothing worth a card.
+ *
+ * Some transcripts are empty, or hold only metadata: no model, no tokens, no
+ * working directory, and so no price. The session is real, so it is still
+ * counted, but it has nothing to say.
+ */
+function isBare(t: Task): boolean {
+  return !t.model && t.costUsd === null && !t.cwd && !t.usage.output;
 }
 
 function money(usd: number | null): string {
@@ -265,15 +277,43 @@ function renderTotals(b: Board): void {
     hit = read + fresh > 0 ? read / (read + fresh) : null;
   }
 
-  const cells: [string, string][] = [
-    [String(sessions), rows ? `sessions on ${fleetFilter || "this machine"}` : "sessions"],
-    [tokens(out), "output tokens"],
-    [money(cost), "spent"],
-    [hit === null ? "—" : `${Math.round(hit * 100)}%`, "from cache"],
+  // A total with no period is a number nobody can check. These cover exactly
+  // the sessions on the board, so the label says so and the tooltip gives the
+  // window they span.
+  const stamps = (rows ?? b.tasks).map((t) => t.updatedAt).filter(Boolean);
+  const span =
+    stamps.length > 0
+      ? `${new Date(Math.min(...stamps)).toLocaleDateString()} – ${new Date(
+          Math.max(...stamps),
+        ).toLocaleDateString()}`
+      : "no sessions";
+
+  const cells: [string, string, string][] = [
+    [
+      String(sessions),
+      rows ? `sessions on ${fleetFilter || "this machine"}` : "sessions",
+      `Every session localflow could find${rows ? ` on ${fleetFilter || "this machine"}` : ""}.`,
+    ],
+    [tokens(out), "output tokens", "Output tokens across the sessions listed."],
+    [
+      money(cost),
+      "spent · these sessions",
+      `Derived from measured tokens at built-in prices` +
+        (b.pricingVerified ? ` verified ${b.pricingVerified},` : ",") +
+        ` ` +
+        `not reported by the provider. Sessions with no known price are excluded. Spans ${span}.`,
+    ],
+    [
+      hit === null ? "—" : `${Math.round(hit * 100)}%`,
+      "from cache",
+      "Share of input tokens served from the prompt cache.",
+    ],
   ];
   const host = $("#totals");
   host.replaceChildren(
-    ...cells.map(([v, k]) => el("div", { class: "t" }, el("b", {}, v), el("span", {}, k))),
+    ...cells.map(([v, k, tip]) =>
+      el("div", { class: "t", title: tip }, el("b", {}, v), el("span", {}, k)),
+    ),
   );
 }
 
@@ -324,7 +364,20 @@ function card(t: Task): HTMLElement {
     bits.push(widest > 1 ? `${children} agents, widest ${widest}` : `${children} agent calls`);
   }
   if (t.queue.length) bits.push(el("span", { class: "queued" }, `${t.queue.length} queued`));
-  if (t.toolErrors) bits.push(el("span", { class: "err" }, `${t.toolErrors} tool errors`));
+  if (t.toolErrors)
+    bits.push(
+      el(
+        "span",
+        {
+          class: "err",
+          title:
+            "Tool calls that returned an error to the model. Agents retry, so a " +
+            "count above zero is normal; a count that dwarfs the session's tool " +
+            "calls is the signal worth chasing.",
+        },
+        `${t.toolErrors} tool errors`,
+      ),
+    );
   bits.forEach((b, i) => {
     if (i) sub.append(" · ");
     sub.append(b as Node | string);
@@ -413,9 +466,14 @@ function renderBoard(b: Board): void {
 
   host.replaceChildren(
     ...LANES.map(({ lane, label, blurb }) => {
-      const inLane = shown.filter((t) => t.lane === lane);
+      const all = shown.filter((t) => t.lane === lane);
+      // A transcript we could read nothing out of still produced a task, and a
+      // full card for it sat next to a four-figure session claiming the same
+      // amount of attention. They collapse to one line instead.
+      const inLane = all.filter((t) => !isBare(t));
+      const bare = all.filter(isBare);
       const body = el("div", { class: "lane-body" });
-      if (!inLane.length) body.append(el("p", { class: "empty" }, blurb));
+      if (!all.length) body.append(el("p", { class: "empty" }, blurb));
       for (const t of inLane) {
         // Reuse the node when nothing on the card changed, so hover and focus
         // survive a poll.
@@ -423,6 +481,18 @@ function renderBoard(b: Board): void {
         const fresh = card(t);
         if (prev && prev.innerHTML === fresh.innerHTML) body.append(prev);
         else body.append(fresh);
+      }
+      if (bare.length) {
+        body.append(
+          el(
+            "p",
+            {
+              class: "bare",
+              title: bare.map((t) => t.name).join(", "),
+            },
+            `${bare.length} session${bare.length === 1 ? "" : "s"} with nothing readable in the transcript`,
+          ),
+        );
       }
       return el(
         "section",
@@ -432,7 +502,7 @@ function renderBoard(b: Board): void {
           { class: "lane-head" },
           el("i", { class: "dot" } as never),
           label,
-          el("span", { class: "n" }, String(inLane.length)),
+          el("span", { class: "n" }, String(all.length)),
         ),
         body,
       );
@@ -1756,21 +1826,57 @@ async function renderSessions(query = ""): Promise<void> {
   body.append(note);
 }
 
-function setView(view: View): void {
+const VIEWS: readonly View[] = ["board", "workflows", "metrics", "sessions"] as const;
+
+/**
+ * Which view the URL is asking for.
+ *
+ * The hash rather than a query parameter, so it composes with the `?snapshot`
+ * and `?open=` parameters the screenshot path already uses instead of fighting
+ * them for the search string.
+ */
+function viewFromLocation(): View {
+  const want = location.hash.replace(/^#\/?/, "");
+  return (VIEWS as readonly string[]).includes(want) ? (want as View) : "board";
+}
+
+type HistoryMode = "push" | "replace" | "none";
+
+/**
+ * Switch view, and put it in the URL.
+ *
+ * Views used to be swapped by setting a data attribute and nothing else, which
+ * meant a view could not be linked, did not survive a refresh, and left the Back
+ * button doing nothing on a page people leave open all day. A click pushes, so
+ * Back walks between views; restoring from the URL applies without pushing, or
+ * every restore would add another entry.
+ */
+function setView(view: View, history_: HistoryMode = "push"): void {
   document.body.dataset.view = view;
   for (const btn of document.querySelectorAll<HTMLElement>(".view-btn")) {
     btn.setAttribute("aria-selected", String(btn.dataset.view === view));
   }
+
+  if (history_ !== "none") {
+    // The board is the default, so it gets a bare URL rather than `#board`.
+    const url = view === "board" ? location.pathname + location.search : `#${view}`;
+    if (history_ === "push") history.pushState(null, "", url);
+    else history.replaceState(null, "", url);
+  }
+
   if (view === "workflows") void renderWorkflows();
   if (view === "metrics") void renderMetrics();
   if (view === "sessions") void renderSessions(($("#sess-q") as HTMLInputElement).value);
 }
 
 function wireViews(): void {
-  document.body.dataset.view = "board";
+  setView(viewFromLocation(), "replace");
   for (const btn of document.querySelectorAll<HTMLElement>(".view-btn")) {
     btn.addEventListener("click", () => setView((btn.dataset.view ?? "board") as View));
   }
+  // Back, Forward, and someone editing the hash by hand.
+  addEventListener("popstate", () => setView(viewFromLocation(), "none"));
+  addEventListener("hashchange", () => setView(viewFromLocation(), "none"));
   let timer: ReturnType<typeof setTimeout> | undefined;
   $("#sess-q").addEventListener("input", (e) => {
     clearTimeout(timer);
