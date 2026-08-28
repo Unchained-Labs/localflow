@@ -690,9 +690,9 @@ cd localflow && pnpm install && pnpm build
 npm i -g .                    # then: localflow
 ```
 
-Not on npm yet: the bare name `localflow` there belongs to an unrelated
-package, so `npx localflow` installs somebody else's code. Until this ships
-under a name of its own, install it from the repo.
+It publishes as `@unchained-labs/localflow`. The bare name `localflow` on npm
+belongs to an unrelated package, so `npx localflow` installs somebody else's
+code — install from the repo until the scoped package is up.
 
 Needs Node 22 and `claude` on your `PATH`. Set `LOCALFLOW_CLAUDE_BIN` if it
 lives somewhere unusual.

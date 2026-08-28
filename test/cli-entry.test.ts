@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -28,6 +28,11 @@ describe.skipIf(!built)("the built CLI, spawned", () => {
 
   it("prints its version when run directly", () => {
     expect(run(BUILT)).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it("reports the version the package declares, not a second copy of it", () => {
+    const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { version: string };
+    expect(run(BUILT)).toBe(pkg.version);
   });
 
   it("prints its version when run through a symlink, as a global install does", () => {

@@ -1,6 +1,6 @@
 {
-  "name": "localflow",
-  "version": "0.1.0",
+  "name": "@unchained-labs/localflow",
+  "version": "0.1.1",
   "description": "A Kanban board and orchestrator for the Claude Code sessions running on your own machine. Reads the live session registry, prices every run from real token counts, and lints the fan-out that actually happened.",
   "keywords": ["claude", "claude-code", "agent", "orchestration", "kanban", "dashboard", "local"],
   "license": "MIT",
@@ -9,6 +9,9 @@
   "homepage": "https://unchained-labs.github.io/localflow/",
   "type": "module",
   "engines": { "node": ">=22" },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": { "localflow": "./dist/src/cli.js" },
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
