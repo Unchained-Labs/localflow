@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** localflow CLI: serve the board, print it, or export what a session actually ran. */
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Board, summarise } from "./board.js";
 import { devicesPath, loadDevices } from "./devices.js";
@@ -16,7 +16,31 @@ import { humanize, waterFor } from "./water.js";
 import { countTasks, readTasks } from "./tasks.js";
 import type { Task } from "./types.js";
 
-const VERSION = "0.1.0";
+/**
+ * The version, from the package rather than a second copy of it.
+ *
+ * It was a literal here, which meant `localflow --version` reported whatever
+ * was last typed into this file rather than what was installed — the same
+ * drift that let a sibling project publish a release under the previous
+ * version number. Walks up because the file sits at `src/` in the repo and
+ * `dist/src/` once built.
+ */
+function packageVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 5; i += 1) {
+    const candidate = join(dir, "package.json");
+    if (existsSync(candidate)) {
+      const pkg = JSON.parse(readFileSync(candidate, "utf8")) as { version?: string };
+      if (pkg.version) return pkg.version;
+    }
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return "0.0.0-unknown";
+}
+
+const VERSION = packageVersion();
 
 const HELP = `localflow ${VERSION} — a Kanban board for the Claude Code sessions on this machine
 
