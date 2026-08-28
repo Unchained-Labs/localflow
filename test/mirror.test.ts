@@ -18,7 +18,7 @@
  * machine would be measuring somebody's network.
  */
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,8 +29,10 @@ import {
   buildManifestScript,
   parseFrames,
   parseManifest,
+  remoteRoot,
 } from "../src/mirror.js";
 import type { Device } from "../src/devices.js";
+import type { SourceSpec } from "../src/agents/jsonl.js";
 
 /** A machine: a `$HOME` with a .claude tree, and an `ssh` that runs scripts against it. */
 function machine(): { home: string; ssh: string; mirror: string } {
@@ -385,6 +387,180 @@ describe("framing", () => {
   it("quotes a device's Claude home rather than interpolating it bare", () => {
     const script = buildManifestScript({ name: "x", host: "h", home: "/opt/state dir" });
     expect(script).toContain("'/opt/state dir'/projects");
+  });
+});
+
+describe("declared sources on a watched device", () => {
+  /** An opencode-shaped store under the fake machine's $HOME. */
+  function remoteOpencode(home: string, session: string, msgs: Record<string, unknown>[]): string {
+    const root = join(home, ".local", "share", "opencode", "storage", "message", session);
+    mkdirSync(root, { recursive: true });
+    msgs.forEach((m, i) =>
+      writeFileSync(join(root, `msg_${i + 1}.json`), JSON.stringify(m, null, 2)),
+    );
+    return root;
+  }
+
+  const OPENCODE: SourceSpec = {
+    id: "opencode",
+    label: "opencode",
+    root: "~/.local/share/opencode/storage/message",
+    layout: "json",
+    fields: { input: "tokens.input", output: "tokens.output", model: "modelID", messageId: "id" },
+  };
+
+  it("puts another machine's opencode sessions on the board", async () => {
+    const m = machine();
+    remoteClaude(m.ssh, []);
+    remoteOpencode(m.home, "ses_remote", [
+      { id: "m1", modelID: "claude-sonnet-5", tokens: { input: 100, output: 40 } },
+      { id: "m2", modelID: "claude-sonnet-5", tokens: { input: 200, output: 60 } },
+    ]);
+
+    const w = new DeviceWatcher(DEVICE, { root: m.mirror, sshBin: m.ssh, sources: [OPENCODE] });
+    const poll = await w.poll();
+
+    const card = poll.tasks.find((t) => t.source === "opencode");
+    expect(card).toBeDefined();
+    expect(card!.device).toBe("studio");
+    expect(card!.id.startsWith("studio:")).toBe(true);
+    // Totalled across the session's message files by the same reader the local
+    // board uses, which is the whole reason the files are mirrored.
+    expect(card!.usage.output).toBe(100);
+  });
+
+  it("shows the path on the device, not the path of our copy", async () => {
+    const m = machine();
+    remoteClaude(m.ssh, []);
+    remoteOpencode(m.home, "ses_remote", [{ id: "m1", tokens: { input: 1, output: 2 } }]);
+
+    const poll = await new DeviceWatcher(DEVICE, {
+      root: m.mirror,
+      sshBin: m.ssh,
+      sources: [OPENCODE],
+    }).poll();
+
+    const card = poll.tasks.find((t) => t.source === "opencode")!;
+    // A drawer pointing at the mirror would send someone looking for a file at
+    // a path that only exists on this machine.
+    expect(card.transcriptPath).toContain(m.home);
+    expect(card.transcriptPath).not.toContain(m.mirror);
+  });
+
+  it("watches nothing extra when no source was declared", async () => {
+    const m = machine();
+    remoteClaude(m.ssh, []);
+    remoteOpencode(m.home, "ses_remote", [{ id: "m1", tokens: { input: 1, output: 2 } }]);
+
+    const poll = await new DeviceWatcher(DEVICE, { root: m.mirror, sshBin: m.ssh }).poll();
+
+    expect(poll.tasks.filter((t) => t.source === "opencode")).toHaveLength(0);
+  });
+
+  it("counts a session right when one of its files vanishes mid-poll", async () => {
+    const m = machine();
+    remoteClaude(m.ssh, []);
+    const dir = remoteOpencode(m.home, "ses_remote", [
+      { id: "m1", tokens: { input: 1, output: 10 } },
+      { id: "m2", tokens: { input: 1, output: 20 } },
+      { id: "m3", tokens: { input: 1, output: 30 } },
+    ]);
+    // The middle file goes away *between* the manifest and the fetch: the
+    // manifest asks for three, the fetch answers with two. The wrapper deletes
+    // it when it sees the fetch script go past, which is exactly that window.
+    //
+    // This pins the totals, not the frame indexing in mirror.ts -- that one is
+    // about which path a byte lands in, and since folding reads content rather
+    // than filenames it cannot be caught from out here. Said plainly because a
+    // test named for a fix it does not exercise is worse than no test.
+    const doomed = join(dir, "msg_2.json");
+    writeFileSync(
+      m.ssh,
+      [
+        "#!/bin/sh",
+        'for a in "$@"; do script=$a; done',
+        `HOME=${JSON.stringify(m.home)}; export HOME`,
+        "PATH=/usr/bin:/bin; export PATH",
+        `case "$script" in *"wc -c"*) rm -f ${JSON.stringify(doomed)} ;; esac`,
+        'exec /bin/sh -c "$script"',
+      ].join("\n"),
+    );
+    chmodSync(m.ssh, 0o755);
+
+    // Declared without messageId, so nothing de-duplicates and a byte that got
+    // counted twice would show up here rather than being folded away.
+    const spec = { ...OPENCODE, fields: { ...OPENCODE.fields, messageId: undefined } };
+    const w = new DeviceWatcher(DEVICE, { root: m.mirror, sshBin: m.ssh, sources: [spec] });
+    await w.poll();
+    const poll = await w.poll();
+
+    const card = poll.tasks.find((t) => t.source === "opencode")!;
+    expect(card.usage.output).toBe(40); // m1 + m3, each exactly once
+  });
+
+  it("drops a mirrored file the device no longer has", async () => {
+    const m = machine();
+    remoteClaude(m.ssh, []);
+    const dir = remoteOpencode(m.home, "ses_remote", [
+      { id: "m1", tokens: { input: 1, output: 10 } },
+      { id: "m2", tokens: { input: 1, output: 20 } },
+    ]);
+
+    const w = new DeviceWatcher(DEVICE, { root: m.mirror, sshBin: m.ssh, sources: [OPENCODE] });
+    expect((await w.poll()).tasks.find((t) => t.source === "opencode")!.usage.output).toBe(30);
+
+    rmSync(join(dir, "msg_2.json"));
+
+    // The declared-source adapter scans the mirror directory, so a file left
+    // behind after it was deleted over there would keep being counted -- a card
+    // billing you for work that is not on the machine any more.
+    const after = await w.poll();
+    expect(after.tasks.find((t) => t.source === "opencode")!.usage.output).toBe(10);
+  });
+
+  it("drops the whole card when the session is gone, rather than freezing it", async () => {
+    const m = machine();
+    remoteClaude(m.ssh, []);
+    const dir = remoteOpencode(m.home, "ses_remote", [{ id: "m1", tokens: { input: 1, output: 10 } }]);
+
+    const w = new DeviceWatcher(DEVICE, { root: m.mirror, sshBin: m.ssh, sources: [OPENCODE] });
+    await w.poll();
+    rmSync(dir, { recursive: true });
+
+    const after = await w.poll();
+    expect(after.tasks.filter((t) => t.source === "opencode")).toHaveLength(0);
+    // And the directory goes with it. Under the json layout a directory *is* a
+    // session, so one left behind is a session this machine still believes in.
+    expect(existsSync(join(m.mirror, "studio", "sources", "opencode", "ses_remote"))).toBe(false);
+  });
+
+  it("expands ~ on the far side rather than looking for a directory called ~", () => {
+    expect(remoteRoot("~/.codex/sessions")).toBe(`"$HOME"'/.codex/sessions'`);
+    // An absolute root is quoted whole, with no expansion to do.
+    expect(remoteRoot("/opt/codex")).toBe("'/opt/codex'");
+    expect(remoteRoot("~")).toBe('"$HOME"');
+  });
+
+  it("drops a source file the device names outside the root it declared", () => {
+    const text = [
+      "==LF-ROOT==",
+      "/home/x/.claude",
+      "==LF-REGISTRY==",
+      "[]",
+      "==LF-FILES==",
+      "==LF-SRC opencode",
+      "/home/x/store",
+      "10\t1\t/home/x/store/ses/a.json",
+      "10\t1\t/etc/passwd",
+      "10\t1\t/home/x/store/../../../etc/shadow.json",
+      "10\t1\t/home/x/store-other/b.json",
+    ].join("\n");
+
+    const files = parseManifest(text, DEVICE).sources[0]!.files;
+
+    // Only the one actually inside the declared root, and by its relative path,
+    // because that relative path becomes a path on this disk.
+    expect(files.map((f) => f.rel)).toEqual(["ses/a.json"]);
   });
 });
 

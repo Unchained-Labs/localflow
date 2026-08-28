@@ -77,6 +77,29 @@ line per completed call and wrong for one that streams, so the board flags it:
 
 ## Working out the paths
 
+Start here, because it does the reading for you:
+
+```sh
+localflow sources            # look, report, suggest
+localflow sources --write    # and put it in sources.json
+```
+
+It checks the usual locations, and where a tool is present it reads **one of
+that tool's actual files** and reports which paths were in it. The field map it
+prints is derived from those bytes, not remembered from anywhere — which is why
+it can be right about a tool this repo has never seen, and why it says nothing
+at all when the sample holds no token counts.
+
+It samples several records rather than the first, because most tools only put
+usage on assistant turns: read line one of a transcript and you would conclude
+the format has no token counts in it.
+
+Existing declarations are left alone. You checked those against the tool; a
+fresh suggestion overwriting them would undo the one act of verification in the
+flow.
+
+By hand, if you prefer or if detection came up short:
+
 ```sh
 head -1 ~/.codex/sessions/<something>.jsonl | python3 -m json.tool
 ```
@@ -85,6 +108,68 @@ Find the model and the token counts in that output, and write their dotted paths
 into `fields`. Then restart localflow and check one card against what the tool
 itself reports. If they disagree, the field paths are wrong — and you can see
 that they are wrong, which is the whole point.
+
+## Layouts
+
+`layout` says how the tool arranges its records.
+
+| | one record per… | a session is… | who does this |
+|---|---|---|---|
+| `"jsonl"` *(default)* | line | a file | Claude Code, Codex, Gemini |
+| `"json"` | file | the **directory** the files sit in | opencode |
+
+opencode writes `storage/message/<sessionID>/msg_<messageID>.json` — one
+pretty-printed object per message. Read line by line, *no* line parses on its
+own, so the source probes fine, finds its files, and produces a card with zero
+tokens and no cost. Not an error. A zero. That is the failure this whole
+document exists to prevent, so the layout is declared rather than sniffed, and a
+source that reads empty now says which layout to try.
+
+Under `json`, `limit` counts sessions rather than files — a cap of 40 files
+would otherwise be two sessions on a busy machine.
+
+## Tools that cannot be read
+
+Two are worth naming, because "localflow does not show my X" deserves an answer.
+
+**Cursor** keeps its conversations in SQLite — `state.vscdb`, a key/value table
+of JSON blobs, with a `-wal` file alongside holding writes that have not landed
+in the main file yet. No `fields` declaration reaches into that. Worth knowing
+before you go looking: Cursor stores that database on the machine running its
+UI, *even when you are working over Remote-SSH*, so a device you watch would not
+have it either.
+
+**Aider** writes its history as Markdown next to the repo it edited
+(`.aider.chat.history.md`). There are no token counts in it in a form this
+reader can total; Aider reports usage to your terminal, and that is the number
+to trust.
+
+`localflow sources` lists both by name rather than leaving them out.
+
+## Sources on a watched device
+
+A source declared here is watched on every monitored device too, not just this
+machine — `--watch-remote` mirrors those files the same way it mirrors Claude
+transcripts, and reads the copy with this same reader. So a Codex session on the
+build box is a card next to a Codex session on your laptop, and the two cannot
+disagree about what a token is, because one reader produced both.
+
+You describe a source once. `~` in `root` is expanded **on each device**, which
+is usually what you want: the same tool, in the same place, under a different
+home directory.
+
+## Badges
+
+Once more than one tool has a card on the board, every card carries a
+two-character badge — `cc`, `oc`, `cx` — and the terminal board prints a key
+underneath. Below that threshold there is no badge: a column of `cc` down a
+Claude-only board is a column spent telling you what you already knew.
+
+`label` sets the name in the key. `color` sets the badge colour, and it is
+deliberately yours rather than ours — see the note in the README for the
+measurement, but the short version is that no hue set stays distinguishable past
+three tools for a red-green colourblind reader, so shipping one would mean
+shipping a legend that lies to some of its readers.
 
 ## Prices
 

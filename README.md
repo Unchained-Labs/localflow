@@ -133,6 +133,77 @@ same usage object, and summing every line inflated output tokens 2.25× on a rea
 Claude transcript. Leave it out and the board says so rather than quietly
 inflating your totals. Full guide: [`docs/sources.md`](docs/sources.md).
 
+### You do not have to write that by hand
+
+```sh
+localflow sources            # what is on this machine, and how it could be read
+localflow sources --write    # put it in sources.json
+```
+
+It looks in the usual places, and where it finds a tool it **reads one of that
+tool's actual files** and reports the paths that were in it. Nothing in the
+suggestion is remembered from anywhere — if `tokens.cache.read` comes back, it
+is because those bytes are on your disk — so the output is a hypothesis you can
+check in one command against what the tool itself reports. That is a thing you
+can do and this repo cannot.
+
+```
+  + opencode
+      ~/.local/share/opencode/storage/message  412 file(s)
+      derived from .../ses_01k9/msg_003.json
+        input      tokens.input
+        output     tokens.output
+        model      modelID
+```
+
+A tool it finds but cannot derive token fields for says so and lists the keys it
+did see, rather than emitting a source that produces free-looking cards.
+Existing declarations are never overwritten: you checked those against the tool,
+and a fresh guess replacing them would undo the one act of verification in the
+whole flow.
+
+### Two layouts, because one of them fails silently
+
+`layout: "jsonl"` (the default) is one record per line, one file per session.
+`layout: "json"` is one record per **file**, with the session being the
+directory they sit in — which is how opencode stores things
+(`storage/message/<sessionID>/msg_<id>.json`).
+
+That distinction is not cosmetic. Read a pretty-printed object line by line and
+*no* line parses, so the source probes fine, finds its files, and produces a
+card with zero tokens and no cost. Not an error — a zero. localflow now names
+that case and tells you which layout to declare.
+
+### What cannot be read at all, and why
+
+- **Cursor** keeps its conversations in SQLite (`state.vscdb`, a key/value table
+  of JSON blobs with a `-wal` file alongside), not in files this adapter can
+  read. Worth knowing before you go looking: Cursor stores that database on the
+  machine running its UI *even when you are working over Remote-SSH*, so a
+  watched device would not have it either.
+- **Aider** writes Markdown next to the repo it edited
+  (`.aider.chat.history.md`), with no token counts in a form this adapter can
+  total. It reports usage to your terminal, and that is the number to trust.
+
+`localflow sources` says both of these by name. "localflow does not show my
+Cursor sessions" deserves an answer better than silence.
+
+### Telling them apart on the board
+
+Once more than one tool has a card, every card gets a two-character badge —
+`cc`, `oc`, `cx` — and the terminal board prints the key underneath. Below that
+threshold there is no badge, because a column of `cc` down a Claude-only board
+tells you something you knew before you opened it.
+
+It is a monogram rather than a colour, and that was measured rather than
+preferred. Any two cards can end up adjacent, so the pairlist that matters is
+*all pairs*; under it a perceptual hue wheel supports **three** categories that
+stay apart for a red-green colourblind reader. At four, two collide
+(normal-vision ΔE 13.7 against a floor of 15); at six the worst pair reaches ΔE
+3.2 under protanopia — two different tools, one colour. There are already more
+than three plausible sources. So `color` in sources.json is **yours** to set if
+you want one; nothing here ships a scheme it cannot defend.
+
 ## Prices you can check
 
 The Anthropic table is in the repo and CI asserts it against

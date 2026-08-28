@@ -59,6 +59,9 @@ import { findDevice, loadDevices, devicesPath } from "./devices.js";
 import { killSession, listSessions as listRemoteSessions, probeDevice, startSession } from "./remote.js";
 import { Fleet, mirrorRoot } from "./mirror.js";
 import type { DevicePoll } from "./mirror.js";
+import { identityFor } from "./agents/identity.js";
+import type { SourceIdentity } from "./agents/identity.js";
+import { loadSources } from "./agents/jsonl.js";
 import { listSessions } from "./sessions.js";
 import { countTasks, createTask, readTasks, setTaskStatus } from "./tasks.js";
 import type { TaskStatus } from "./tasks.js";
@@ -183,7 +186,14 @@ export class LocalflowServer {
     // a restart, which is the right cost for a file that changes about as often
     // as you install a new agent CLI.
     this.sourcesError = this.registry.addDeclared().error;
-    this.fleet = new Fleet({ history: opts.history, asOf: opts.asOf });
+    // The same declarations the local adapters use. A source described once
+    // and watched everywhere is the whole point; describing it twice would be
+    // two places to get it wrong.
+    this.fleet = new Fleet({
+      history: opts.history,
+      asOf: opts.asOf,
+      sources: loadSources().sources,
+    });
   }
 
   async start(): Promise<{ url: string }> {
@@ -332,6 +342,11 @@ export class LocalflowServer {
         otter: otterUrl(this.opts) ?? null,
         adapters: this.adapterStatus,
         sourcesPath: sourcesPath(),
+        // The legend the board draws its badges from. Built-ins first, then
+        // whatever is declared, so a card's `source` always resolves to
+        // something with a name -- a badge reading `op` with no tooltip is
+        // worse than no badge.
+        sources: this.sourceLegend(),
         pricing: {
           path: pricingPath(),
           models: Object.keys(ext.models).length,
@@ -745,6 +760,22 @@ export class LocalflowServer {
    * a round trip per device and answers a question -- "could I launch here?" --
    * that a board in watch-only mode has no business asking.
    */
+  /**
+   * Every source that could put a card on this board.
+   *
+   * `claude` is always here because the built-in reader is always wired up.
+   * `otter` only when an Otter URL was given -- a legend entry for a tool that
+   * cannot appear is a legend that has to be read past.
+   */
+  private sourceLegend(): SourceIdentity[] {
+    const out: SourceIdentity[] = [identityFor("claude", {}, true)];
+    if (otterUrl(this.opts)) out.push(identityFor("otter", {}, true));
+    for (const spec of loadSources().sources) {
+      out.push(identityFor(spec.id, { label: spec.label, color: spec.color }));
+    }
+    return out;
+  }
+
   private async devices(res: ServerResponse): Promise<void> {
     const canStart = Boolean(this.opts.allowRemote);
     const watching = Boolean(this.opts.watchRemote);

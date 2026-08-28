@@ -153,6 +153,18 @@ body { display: flex; flex-direction: column; }
   color: var(--ul-heading);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* The tool that wrote this card. A monogram, not a colour: past three tools no
+   hue set stays distinguishable under red-green colour blindness at arbitrary
+   adjacency, and two agents wearing one colour on a board about honest numbers
+   is not a trade worth making. `color` here is only ever set inline, from what
+   the operator put in sources.json. */
+.card h3 .src {
+  font-family: var(--ul-font-mono, monospace); font-size: 10px; font-weight: 600;
+  color: var(--ul-muted); border: 1px solid var(--ul-line-strong);
+  border-radius: 3px; padding: 0.05rem 0.25rem; margin-right: 0.35rem;
+  vertical-align: 0.1em; letter-spacing: 0.02em; text-transform: lowercase;
+}
+
 /* The machine, inline before the title so it reads as part of the sentence
    rather than as a badge floating over it. */
 .card h3 .on {
