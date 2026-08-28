@@ -26,9 +26,13 @@ and the transcripts it already writes, and puts every session on one board with
 what it is doing, what it has spent, and whether it is stuck on you.
 
 ```sh
-npx localflow                 # http://127.0.0.1:7317
-npx localflow board           # the same thing, in the terminal
+git clone https://github.com/Unchained-Labs/localflow
+cd localflow && pnpm install && pnpm build
+npm i -g .                    # then: localflow
 ```
+
+Then `localflow` for the board at http://127.0.0.1:7317, or `localflow board`
+for the same thing in the terminal.
 
 Nothing is sent anywhere. There is no daemon to install, no config, and no
 account — the data is already on your disk, localflow just reads it. The one
@@ -379,7 +383,7 @@ All three tools are optional. Each one absent is one section that says it is
 absent, and the rest of the board is unaffected:
 
 ```sh
-npm i -g graphlint preflight decorrelate
+npm i -g graphlint preflight-cost decorrelate
 ```
 
 ## Workflows: the graph you write
@@ -681,9 +685,14 @@ produced by the system that ran the job.
 ## Install
 
 ```sh
-npx localflow                  # no install
-npm i -g localflow             # or keep it around
+git clone https://github.com/Unchained-Labs/localflow
+cd localflow && pnpm install && pnpm build
+npm i -g .                    # then: localflow
 ```
+
+Not on npm yet: the bare name `localflow` there belongs to an unrelated
+package, so `npx localflow` installs somebody else's code. Until this ships
+under a name of its own, install it from the repo.
 
 Needs Node 22 and `claude` on your `PATH`. Set `LOCALFLOW_CLAUDE_BIN` if it
 lives somewhere unusual.

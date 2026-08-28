@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** localflow CLI: serve the board, print it, or export what a session actually ran. */
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Board, summarise } from "./board.js";
@@ -507,9 +508,28 @@ function pickTask(tasks: Task[], id: string | undefined): Task | undefined {
   );
 }
 
-// Only when run as the program, so importing this module for a test does not
-// start a server.
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+/**
+ * True when this module is the program, rather than an import.
+ *
+ * Both sides go through `realpath` because `npm i -g` installs the bin as a
+ * symlink: `process.argv[1]` is then the link in the bin directory while
+ * `import.meta.url` is the real file under node_modules. Comparing them
+ * unresolved made the installed CLI do nothing at all and exit 0 — the tests
+ * could not see it, because they call `main()` directly and never go through
+ * the shim.
+ */
+function isProgram(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return realpathSync(resolve(argv1)) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    // A path that cannot be resolved is not this file.
+    return false;
+  }
+}
+
+if (isProgram()) {
   main().then(
     (code) => {
       if (code !== undefined) process.exitCode = code;
