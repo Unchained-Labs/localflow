@@ -1,4 +1,5 @@
 /** The board, as a terminal reads it. */
+import { identityFor } from "./agents/identity.js";
 import { cacheWriteTotal } from "./types.js";
 import type { BoardSummary, Lane, Task } from "./types.js";
 
@@ -37,7 +38,7 @@ export function age(ms: number): string {
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
 }
 
-function card(t: Task): string[] {
+function card(t: Task, many: boolean): string[] {
   const out: string[] = [];
   const title = t.title.length > 62 ? `${t.title.slice(0, 61)}…` : t.title;
   // No error flag beside the title. A tool_result with is_error is routine — a
@@ -49,7 +50,11 @@ function card(t: Task): string[] {
   // read anything else on the card, and a local session stays unlabelled so the
   // label keeps meaning something.
   const where = t.device ? `${cyan(`@${t.device}`)} ` : "";
-  out.push(`    ${where}${bold(title)}`);
+  // Only once there is more than one kind of session here. A column of `cc`
+  // down a Claude-only board is a column of pixels spent on something its
+  // reader already knew.
+  const who = many ? `${grey(`[${identityFor(t.source).glyph}]`)} ` : "";
+  out.push(`    ${who}${where}${bold(title)}`);
 
   const bits = [
     grey(t.name),
@@ -112,15 +117,26 @@ export function renderBoard(
     return out.join("\n");
   }
 
+  const many = new Set(b.tasks.map((t) => t.source)).size > 1;
   for (const { lane, label, paint } of LANES) {
     const inLane = b.tasks.filter((t) => t.lane === lane);
     if (!inLane.length) continue;
     out.push(`  ${paint(label)} ${grey(`(${inLane.length})`)}`);
     out.push("");
     for (const t of inLane) {
-      out.push(...card(t));
+      out.push(...card(t, many));
       out.push("");
     }
+  }
+
+  // The key, once, under the lanes. A monogram nobody can expand is a worse
+  // label than the id it replaced.
+  if (many) {
+    const seen = [...new Set(b.tasks.map((t) => t.source))].sort();
+    out.push(
+      grey(`  ${seen.map((id) => `[${identityFor(id).glyph}] ${identityFor(id).label}`).join("   ")}`),
+    );
+    out.push("");
   }
 
   if (b.degraded.length) {

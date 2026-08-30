@@ -317,7 +317,7 @@ function renderTotals(b: Board): void {
   );
 }
 
-function card(t: Task): HTMLElement {
+function card(t: Task, many = false): HTMLElement {
   const cls = ["card"];
   if (t.source === "otter") cls.push("otter");
   if (t.device) cls.push("remote");
@@ -331,6 +331,8 @@ function card(t: Task): HTMLElement {
   // every other fact on the card mean something, and a local session stays
   // unlabelled so that a label keeps being worth reading.
   const h = el("h3");
+  const badge = badgeFor(t, many);
+  if (badge) h.append(badge);
   if (t.device) h.append(el("span", { class: "on" }, t.device));
   h.append(t.title);
   c.append(h);
@@ -400,6 +402,44 @@ function card(t: Task): HTMLElement {
  */
 let fleetFilter: string | null = null;
 
+/**
+ * Which tool wrote each card, keyed by the card's `source`.
+ *
+ * Served by the board rather than hard-coded here, so a source someone declared
+ * in sources.json this morning has a name and a monogram this afternoon without
+ * a release. An id that is not in here still renders -- see `badgeFor` -- it
+ * just renders as itself.
+ */
+const sources = new Map<string, SourceIdentity>();
+
+/**
+ * The badge, or nothing.
+ *
+ * Nothing when this machine only has one kind of session on it: a board where
+ * every card says `cc` has spent a column of pixels telling you something you
+ * knew before you opened it. The moment a second tool appears, *every* card
+ * gets a badge -- labelling only the newcomer would leave you inferring what
+ * the unlabelled ones are, which is the ambiguity the badge exists to remove.
+ *
+ * The monogram carries the identity and the colour does not, deliberately. See
+ * src/agents/identity.ts: past three tools no hue set stays distinguishable for
+ * a red-green colourblind reader at arbitrary adjacency, so `color` is only
+ * ever what the operator asked for in sources.json, and its absence costs
+ * nothing.
+ */
+function badgeFor(t: Task, many: boolean): HTMLElement | null {
+  if (!many) return null;
+  const id = t.source;
+  const src = sources.get(id);
+  const glyph = src?.glyph ?? id.slice(0, 2).toLowerCase();
+  const b = el("span", { class: "src", title: src?.label ?? id }, glyph);
+  if (src?.color) {
+    b.style.color = src.color;
+    b.style.borderColor = src.color;
+  }
+  return b;
+}
+
 /** Every machine with a card on the current board, this one first. */
 function machines(b: Board): string[] {
   const seen = new Set<string>();
@@ -463,6 +503,9 @@ function renderBoard(b: Board): void {
 
   renderFleet(b);
   const shown = fleetFilter === null ? b.tasks : b.tasks.filter((t) => (t.device ?? "") === fleetFilter);
+  // Computed from the whole board, not the filtered view: filtering to one
+  // machine must not make the badges vanish and reappear as you click.
+  const manySources = new Set(b.tasks.map((t) => t.source)).size > 1;
 
   host.replaceChildren(
     ...LANES.map(({ lane, label, blurb }) => {
@@ -478,7 +521,7 @@ function renderBoard(b: Board): void {
         // Reuse the node when nothing on the card changed, so hover and focus
         // survive a poll.
         const prev = existing.get(t.id);
-        const fresh = card(t);
+        const fresh = card(t, manySources);
         if (prev && prev.innerHTML === fresh.innerHTML) body.append(prev);
         else body.append(fresh);
       }
@@ -1316,8 +1359,13 @@ function connect(): void {
 
 async function init(): Promise<void> {
   try {
-    const h = (await (await fetch("/api/health")).json()) as { actions: boolean; otter: string | null };
+    const h = (await (await fetch("/api/health")).json()) as {
+      actions: boolean;
+      otter: string | null;
+      sources?: SourceIdentity[];
+    };
     actionsEnabled = Boolean(h.actions);
+    for (const src of h.sources ?? []) sources.set(src.id, src);
     $("#mode").textContent = actionsEnabled ? "actions armed" : "read-only";
     $("#mode").className = actionsEnabled ? "pill armed" : "pill";
     ($("#new-task") as HTMLButtonElement).hidden = !actionsEnabled;
@@ -1889,6 +1937,14 @@ function wireViews(): void {
 // The panel is deliberately quiet when the feature is off. A machine that never
 // registered a device should not be told about a capability it is not using, and
 // a board full of "remote disabled" banners teaches its reader to skip banners.
+
+interface SourceIdentity {
+  id: string;
+  label: string;
+  glyph: string;
+  color?: string;
+  builtIn: boolean;
+}
 
 interface DeviceSession {
   name: string;

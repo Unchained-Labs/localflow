@@ -1,9 +1,29 @@
 #!/usr/bin/env node
 /** localflow CLI: serve the board, print it, or export what a session actually ran. */
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+/** Break a sentence onto lines a terminal will not fold mid-word. */
+function wrap(text: string, width: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    if (line && line.length + word.length + 1 > width) {
+      out.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
 import { Board, summarise } from "./board.js";
+import { AdapterRegistry } from "./agents/registry.js";
+import { candidates, detect, specFor } from "./agents/detect.js";
+import { loadSources, sourcesPath } from "./agents/jsonl.js";
+import type { SourceSpec } from "./agents/jsonl.js";
 import { devicesPath, loadDevices } from "./devices.js";
 import { Fleet, mirrorRoot } from "./mirror.js";
 import { notesFor, observedSpec } from "./graph.js";
@@ -52,6 +72,8 @@ USAGE
   localflow workflows              the workflows in ~/.localflow/workflows
   localflow run <workflow>         run one, after linting and pricing it first
   localflow calibrate              the measured cache hit rate, for preflight.json
+  localflow sources                other agent tools here, and how they could be read
+                                   (--write puts the result in sources.json)
   localflow sessions [query]       every session on this machine, not just recent ones
   localflow tasks <sessionId>      that session's task list
   localflow metrics                the numbers behind the plots, as JSON
@@ -72,7 +94,8 @@ OPTIONS
   --watch-remote           also show the sessions running on every machine in
                            ~/.localflow/devices.json. Read-only, and separate from
                            --allow-remote: watching copies those machines'
-                           transcripts to ~/.localflow/mirror so they can be priced
+                           transcripts -- and the files of any source declared in
+                           sources.json -- to ~/.localflow/mirror, so they are read
                            by the same reader as local ones. Off by default.
   --remote-poll MS         how often devices are polled (default 10000)
   --allow-root PATH        restrict spawn to a directory (repeatable)
@@ -204,6 +227,75 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     url: flag(argv, "--otter"),
   };
 
+  if (cmd === "sources") {
+    // Two jobs, and they are deliberately separate: `sources` says what is on
+    // this machine and how it could be read, `sources --write` puts it in the
+    // file. A command that edited sources.json just for being run would be a
+    // command nobody dares try.
+    const findings = detect();
+    const byId = new Map(candidates().map((c) => [c.id, c]));
+
+    if (format === "json") {
+      process.stdout.write(`${JSON.stringify({ findings, path: sourcesPath() }, null, 2)}\n`);
+      return 0;
+    }
+
+    const specs: SourceSpec[] = [];
+    process.stdout.write("\n");
+    for (const f of findings) {
+      const c = byId.get(f.id)!;
+      const mark = f.usable ? "+" : c.unreadable ? "x" : f.root ? "!" : " ";
+      process.stdout.write(`  ${mark} ${f.label}\n`);
+      if (f.root) process.stdout.write(`      ${f.root}${f.files ? `  ${f.files} file(s)` : ""}\n`);
+      if (f.note) {
+        for (const line of wrap(f.note, 68)) process.stdout.write(`      ${line}\n`);
+      }
+      if (f.usable) {
+        const spec = specFor(f, c);
+        if (spec) specs.push(spec);
+        // The provenance line. These field paths are not this repo's opinion
+        // about the tool; they are what was in the file it just read.
+        process.stdout.write(`      derived from ${f.sampled}\n`);
+        for (const [k, v] of Object.entries(f.fields)) {
+          process.stdout.write(`        ${k.padEnd(10)} ${v}\n`);
+        }
+      } else if (f.paths.length) {
+        process.stdout.write(`      keys found: ${f.paths.slice(0, 12).map((p) => p.path).join(", ")}\n`);
+      }
+      process.stdout.write("\n");
+    }
+
+    if (!specs.length) {
+      process.stdout.write("  nothing here can be read into cards yet.\n\n");
+      return 0;
+    }
+
+    const merged = { sources: specs };
+    if (!argv.includes("--write")) {
+      process.stdout.write("  add this to your sources.json, or re-run with --write:\n\n");
+      process.stdout.write(`${JSON.stringify(merged, null, 2)}\n\n`);
+      return 0;
+    }
+
+    // Existing declarations win. A detected source that is already declared has
+    // been checked by a human against what the tool reports, and overwriting
+    // that with a fresh guess would undo the one act of verification in the
+    // whole flow.
+    const existing = loadSources().sources;
+    const have = new Set(existing.map((x) => x.id));
+    const added = specs.filter((x) => !have.has(x.id));
+    const path = sourcesPath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ sources: [...existing, ...added] }, null, 2)}\n`);
+    process.stdout.write(
+      added.length
+        ? `  wrote ${added.length} source(s) to ${path}: ${added.map((x) => x.id).join(", ")}\n` +
+            "  check one card against what the tool itself reports before trusting the totals.\n\n"
+        : `  ${path} already declares every source found here — nothing changed.\n\n`,
+    );
+    return 0;
+  }
+
   if (cmd === "sessions") {
     const query = argv.slice(1).find((a) => !a.startsWith("-"));
     const archive = listSessions({ query, limit: Number(flag(argv, "--limit") ?? 0) });
@@ -263,12 +355,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return 2;
     }
 
+    // Declared sources, the same ones the served board shows. Without this the
+    // terminal board silently omitted every non-Claude tool while the web board
+    // displayed them -- two views of one machine that disagreed about what was
+    // on it, with nothing on either saying so.
+    {
+      const registry = new AdapterRegistry();
+      const { error: srcErr } = registry.addDeclared();
+      const extra = await registry.poll({ asOf: common.asOf, history: common.history });
+      const degraded = [...summary.degraded, ...extra.degraded];
+      if (srcErr) degraded.push({ id: "sources", reason: srcErr });
+      for (const a of extra.adapters) {
+        if (!a.probe.ok && !a.probe.absent) degraded.push({ id: a.id, reason: a.probe.detail });
+      }
+      if (extra.tasks.length || degraded.length !== summary.degraded.length) {
+        summary = summarise([...summary.tasks, ...extra.tasks], degraded, common.asOf);
+      }
+    }
+
     // One-shot commands honour --watch-remote too. A flag that worked for the
     // server and was silently ignored by `localflow board` would be worse than
     // not having it: you would read a fleet-wide total that was one machine's.
     if (argv.includes("--watch-remote")) {
       const { devices, error: devErr } = loadDevices();
-      const fleet = new Fleet({ history: common.history, asOf: common.asOf });
+      const fleet = new Fleet({ history: common.history, asOf: common.asOf, sources: loadSources().sources });
       fleet.sync(devices);
       const polls = await fleet.poll();
       const remote = polls.flatMap((p) => p.tasks);

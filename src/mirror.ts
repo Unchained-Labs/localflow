@@ -56,14 +56,16 @@
  * our manifest with a creative path gets its answer dropped, not run.
  */
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, appendFileSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { TranscriptCache, toTask } from "./claude.js";
 import type { Device } from "./devices.js";
 import { shq } from "./remote.js";
+import { DeclaredSourceAdapter } from "./agents/jsonl.js";
+import type { SourceSpec } from "./agents/jsonl.js";
 import type { LiveSession, Task } from "./types.js";
 
 const run = promisify(execFile);
@@ -110,6 +112,18 @@ export const DEFAULT_MAX_PER_POLL = 48 << 20;
 export interface MirrorOptions {
   /** Where mirrored transcripts live. */
   root?: string;
+  /**
+   * Declared sources to watch on the device as well as Claude Code.
+   *
+   * Without this a watched machine is a Claude-only machine: the manifest looks
+   * in `~/.claude/projects` and nowhere else, so the Codex and opencode
+   * sessions running on the same box are simply not there. A fleet view that
+   * silently covers one of the tools on each machine is the wrong kind of
+   * incomplete -- it looks complete.
+   *
+   * The same declarations the local board uses, so a source is described once.
+   */
+  sources?: SourceSpec[];
   /** Bytes pulled on a first sync. */
   firstPull?: number;
   /** Ceiling on one fetch call. The rest waits for the next poll. */
@@ -207,11 +221,11 @@ function remoteHome(device: Device): string {
  * caller can tell the two apart because the registry section is empty while the
  * file section is not.
  */
-export function buildManifestScript(device: Device): string {
+export function buildManifestScript(device: Device, sources: SourceSpec[] = []): string {
   const bin = shq(device.bin ?? "claude");
   const root = remoteHome(device);
   const TAB = "\t";
-  return [
+  const parts = [
     // Printed by the far side rather than assumed here: `$HOME` is expanded
     // over there, and this is what every path is then checked against.
     `printf '==LF-ROOT==\\n'`,
@@ -220,8 +234,40 @@ export function buildManifestScript(device: Device): string {
     `command -v ${bin} >/dev/null 2>&1 && ${bin} agents --json 2>/dev/null || true`,
     `printf '\\n==LF-FILES==\\n'`,
     `if stat -c %Y . >/dev/null 2>&1; then LFF='-c%s${TAB}%Y${TAB}%n'; else LFF='-f%z${TAB}%m${TAB}%N'; fi`,
-    `find ${root}/projects -type f -name '*.jsonl' -print0 2>/dev/null | xargs -0 stat "$LFF" 2>/dev/null || true`,
-  ].join("\n");
+    `find ${root}/projects -type f -name '*.jsonl' 2>/dev/null | head -4000 | tr '\\n' '\\0' | xargs -0 stat "$LFF" 2>/dev/null || true`,
+  ];
+
+  for (const spec of sources) {
+    if (!SOURCE_ID_RE.test(spec.id)) continue;
+    const r = remoteRoot(spec.root);
+    // Its own root is printed with it, for the same reason the Claude one is:
+    // `~` and `$HOME` mean whatever they mean over there, and every path that
+    // comes back is checked against what the device said rather than what we
+    // guessed it would say.
+    parts.push(`printf '==LF-SRC %s\\n' ${shq(spec.id)}`);
+    parts.push(`printf '%s\\n' ${r}`);
+    parts.push(
+      `find ${r} -type f 2>/dev/null | grep -E ${shq(spec.match ?? (spec.layout === "json" ? "\\.json$" : "\\.jsonl$"))} ` +
+        `| head -2000 | tr '\\n' '\\0' | xargs -0 stat "$LFF" 2>/dev/null || true`,
+    );
+  }
+  return parts.join("\n");
+}
+
+/** Source ids we are willing to put in a script or use as a directory name. */
+const SOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * A declared root, as shell source for the far side.
+ *
+ * `~/x` has to become `"$HOME"'/x'` rather than `'~/x'`: a tilde inside single
+ * quotes is a literal tilde, and `find '~/.codex'` looks for a directory
+ * actually named `~`. Everything after the tilde is still quoted, so the
+ * expansion is the only thing the remote shell gets to do.
+ */
+export function remoteRoot(root: string): string {
+  if (root === "~") return `"$HOME"`;
+  return root.startsWith("~/") ? `"$HOME"${shq(root.slice(1))}` : shq(root);
 }
 
 export interface RemoteFile {
@@ -231,9 +277,18 @@ export interface RemoteFile {
   mtime: number;
 }
 
+/** One declared source's files on the device, with the root they hang off. */
+export interface RemoteSourceFiles {
+  id: string;
+  root: string;
+  files: { rel: string; path: string; size: number; mtime: number }[];
+}
+
 export interface Manifest {
   sessions: LiveSession[];
   files: RemoteFile[];
+  /** Declared sources, in the order they were asked about. */
+  sources: RemoteSourceFiles[];
   /** Set when `claude agents --json` could not be run or did not parse. */
   registryError?: string;
 }
@@ -252,12 +307,14 @@ export function parseManifest(text: string, device: Device): Manifest {
   const regAt = text.indexOf("==LF-REGISTRY==");
   const filesAt = text.indexOf("==LF-FILES==");
   if (rootAt < 0 || regAt < 0 || filesAt < 0) {
-    return { sessions: [], files: [], registryError: "the device did not answer in the expected form" };
+    return { sessions: [], files: [], sources: [], registryError: "the device did not answer in the expected form" };
   }
   const root = text.slice(rootAt + "==LF-ROOT==".length, regAt).trim();
   const prefix = `${root.replace(/\/$/, "")}/projects/`;
   const regText = text.slice(regAt + "==LF-REGISTRY==".length, filesAt).trim();
-  const fileText = text.slice(filesAt + "==LF-FILES==".length);
+  // The Claude file list runs to the first source marker, or to the end.
+  const srcAt = text.indexOf("\n==LF-SRC ", filesAt);
+  const fileText = text.slice(filesAt + "==LF-FILES==".length, srcAt < 0 ? undefined : srcAt);
 
   let sessions: LiveSession[] = [];
   let registryError: string | undefined;
@@ -292,7 +349,53 @@ export function parseManifest(text: string, device: Device): Manifest {
     if (!Number.isFinite(size)) continue;
     files.push({ id, path, size, mtime: Number.isFinite(mtime) ? mtime * 1000 : 0 });
   }
-  return { sessions, files, registryError };
+
+  return { sessions, files, sources: parseSourceSections(text, srcAt), registryError };
+}
+
+/**
+ * The `==LF-SRC <id>` blocks, each carrying its own root.
+ *
+ * Containment is per source and against the root that source printed, so one
+ * misdeclared root cannot pull files out of another source's tree, and no root
+ * is trusted to be where we asked for it.
+ */
+function parseSourceSections(text: string, from: number): RemoteSourceFiles[] {
+  if (from < 0) return [];
+  const out: RemoteSourceFiles[] = [];
+  const blocks = text.slice(from + 1).split("==LF-SRC ");
+
+  for (const block of blocks) {
+    if (!block.trim()) continue;
+    const lines = block.split("\n");
+    const id = (lines.shift() ?? "").trim();
+    const root = (lines.shift() ?? "").trim().replace(/\/$/, "");
+    if (!SOURCE_ID_RE.test(id) || !root) continue;
+
+    const files: RemoteSourceFiles["files"] = [];
+    for (const line of lines) {
+      if (!line.trim() || line.startsWith("==LF-")) continue;
+      const [sizeStr, mtimeStr, path] = line.split("\t");
+      // Not PATH_RE: that one ends in `.jsonl` because it guards Claude
+      // transcripts, and a source's files are whatever that tool writes --
+      // requiring the suffix here dropped every opencode message silently.
+      // Containment against the root the source printed is the real check, and
+      // it is the one below.
+      if (!path || /\s/.test(path)) continue;
+      if (!path.startsWith(`${root}/`) || path.includes("/../")) continue;
+      const rel = path.slice(root.length + 1);
+      // The relative path becomes a path on this disk. Anything that could
+      // climb out of the mirror directory is dropped rather than sanitised --
+      // a rewritten path would still be a path the device chose.
+      if (!rel || rel.startsWith("/") || rel.split("/").some((seg) => seg === ".." || seg === "")) continue;
+      const size = Number(sizeStr);
+      const mtime = Number(mtimeStr);
+      if (!Number.isFinite(size)) continue;
+      files.push({ rel, path, size, mtime: Number.isFinite(mtime) ? mtime * 1000 : 0 });
+    }
+    out.push({ id, root, files });
+  }
+  return out;
 }
 
 /** One file's worth of "send me what I do not have yet". */
@@ -428,7 +531,7 @@ export class DeviceWatcher {
   async poll(): Promise<DevicePoll> {
     const base = { device: this.device.name, host: this.device.host };
 
-    const manRes = await ssh(this.device, buildManifestScript(this.device), this.opts, 25_000);
+    const manRes = await ssh(this.device, buildManifestScript(this.device, this.opts.sources ?? []), this.opts, 25_000);
     if (!manRes.ok) {
       // The cards we already have are not deleted. A laptop that closed its lid
       // did not stop having had those sessions, and a board that empties a lane
@@ -552,7 +655,13 @@ export class DeviceWatcher {
       }
     }
 
-    const tasks: Task[] = [];
+    // Declared sources on this device. Mirrored into their own tree and then
+    // read by the very same DeclaredSourceAdapter the local board uses -- the
+    // point being that a remote Codex card and a local one come off the same
+    // reader, so they cannot disagree about what a token is.
+    const sourceTasks = await this.syncSources(manifest, degraded);
+
+    const tasks: Task[] = [...sourceTasks];
     const seen = new Set<string>();
     for (const id of wantIds) {
       if (seen.has(id)) continue;
@@ -620,6 +729,127 @@ export class DeviceWatcher {
   }
 
   /**
+   * Mirror every declared source's files, then read the copy.
+   *
+   * Whole files rather than tails: these are small (a Codex session is
+   * kilobytes, an opencode message is a few hundred bytes) and the adapter
+   * re-reads them in full anyway, so an offset would buy nothing and cost the
+   * one guarantee that matters -- that the local copy is byte-identical to what
+   * is over there.
+   */
+  private async syncSources(
+    manifest: Manifest,
+    degraded: { id: string; reason: string }[],
+  ): Promise<Task[]> {
+    const declared = new Map((this.opts.sources ?? []).map((s) => [s.id, s]));
+    if (!declared.size) return [];
+
+    const tasks: Task[] = [];
+    for (const remote of manifest.sources) {
+      const spec = declared.get(remote.id);
+      if (!spec) continue;
+
+      const base = join(this.dir(), "sources", remote.id);
+      const wants: { path: string; to: string; from: number }[] = [];
+      for (const f of remote.files) {
+        const to = join(base, f.rel);
+        let have = -1;
+        try {
+          have = statSync(to).size;
+        } catch {
+          /* not mirrored yet */
+        }
+        if (have !== f.size) wants.push({ path: f.path, to, from: 0 });
+      }
+
+      if (wants.length) {
+        // The frame id carries the *index* of the file it answers, not just the
+        // source. A file that vanishes between the manifest and the fetch emits
+        // no frame, and matching by position would then write every later
+        // file's bytes into the previous file's path.
+        //
+        // Worth being exact about what that costs, because it is less than it
+        // looks: the totals come from record *content*, not from filenames, so
+        // a misfiled copy still counts once and still counts right, and the
+        // next poll's prune clears it. What it breaks is the mirror's actual
+        // promise -- that a path here holds the bytes of the same path there --
+        // which is what makes `transcriptPath` worth showing and what anyone
+        // debugging this directory will assume. Cheap to keep true.
+        const script = wants
+          .map((w, i) =>
+            [
+              `LFN=$(wc -c < ${shq(w.path)} 2>/dev/null || echo 0)`,
+              `if [ "$LFN" -gt 0 ]; then`,
+              `  printf '${FRAME}%s %s\n' ${shq(`${remote.id}-${i}`)} "$LFN"`,
+              `  cat ${shq(w.path)} 2>/dev/null | head -c "$LFN"`,
+              `fi`,
+            ].join("\n"),
+          )
+          .join("\n");
+
+        const got = await ssh(this.device, script, this.opts, 120_000);
+        if (!got.ok) {
+          degraded.push({
+            id: `device:${this.device.name}`,
+            reason: `${this.device.name}: could not read ${remote.id} files (${got.error})`,
+          });
+        } else {
+          // Each frame names which want it answers. The id is an index we
+          // chose, never a path the device chose: a path from over there
+          // deciding where a byte lands on this disk is the thing that must not
+          // be possible.
+          for (const chunk of parseFrames(got.out)) {
+            const at = chunk.id.lastIndexOf("-");
+            const i = at < 0 ? -1 : Number(chunk.id.slice(at + 1));
+            const w = Number.isInteger(i) && i >= 0 && i < wants.length ? wants[i] : undefined;
+            if (!w) continue;
+            try {
+              mkdirSync(dirname(w.to), { recursive: true, mode: 0o700 });
+              writeFileSync(w.to, chunk.bytes);
+            } catch (e) {
+              degraded.push({
+                id: `device:${this.device.name}`,
+                reason: `${this.device.name}: could not write the mirror of ${remote.id}: ${(e as Error).message}`,
+              });
+              break;
+            }
+          }
+        }
+      }
+
+      if (!existsSync(base)) continue;
+
+      // Drop anything the device no longer has.
+      //
+      // Unlike the Claude mirror -- where a vanished transcript simply stops
+      // being asked for -- the declared-source adapter *scans this directory*,
+      // so a file left here after it was deleted over there keeps producing a
+      // card, and its tokens keep being counted. Only ever after a good
+      // manifest: pruning on a failed poll would empty the mirror of a machine
+      // that is merely asleep.
+      prune(base, new Set(remote.files.map((f) => f.rel)), degraded, this.device.name, remote.id);
+
+      const adapter = new DeclaredSourceAdapter({ ...spec, root: base });
+      const result = await adapter.poll({ asOf: this.opts.asOf, history: this.opts.history });
+      for (const t of result.tasks) {
+        // Re-keyed onto the device, and the mirror path swapped back for the
+        // real one: a drawer that pointed at this machine's copy would send
+        // someone looking for a file at a path that only exists here.
+        t.id = `${this.device.name}:${t.id}`;
+        t.device = this.device.name;
+        if (t.transcriptPath?.startsWith(base)) {
+          t.transcriptPath = `${remote.root}${t.transcriptPath.slice(base.length)}`;
+        }
+        tasks.push(t);
+      }
+      for (const d of result.degraded) {
+        degraded.push({ id: `${this.device.name}:${d.id}`, reason: d.reason });
+      }
+    }
+    return tasks;
+  }
+
+  /**
    * Two machines can hold the same session id -- a cloned home directory is
    * enough -- and a board keyed on the bare id would merge their cards and add
    * their costs together. The device name is part of the identity.
@@ -627,6 +857,67 @@ export class DeviceWatcher {
   private qualify(id: string): string {
     return `${this.device.name}:${id}`;
   }
+}
+
+/**
+ * Delete mirrored files the device did not list, and any directory left empty.
+ *
+ * The empty-directory sweep matters for the json layout, where a directory *is*
+ * a session: leaving one behind would leave a card for a session that no longer
+ * exists anywhere, showing whatever the last poll happened to see.
+ */
+function prune(
+  base: string,
+  keep: Set<string>,
+  degraded: { id: string; reason: string }[],
+  device: string,
+  sourceId: string,
+): void {
+  const walk = (dir: string, rel: string): boolean => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    let left = 0;
+    for (const e of entries) {
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (walk(full, childRel)) left++;
+        continue;
+      }
+      if (keep.has(childRel)) {
+        left++;
+        continue;
+      }
+      try {
+        rmSync(full);
+      } catch (err) {
+        // Said out loud: a mirror we cannot prune keeps counting tokens for
+        // work that is not there any more, and a silent failure here reads as
+        // a session still running up a bill.
+        degraded.push({
+          id: `device:${device}`,
+          reason: `${device}: could not drop a stale ${sourceId} file (${(err as Error).message})`,
+        });
+        left++;
+      }
+    }
+    if (!left && rel) {
+      try {
+        // Recursive, because a plain rmSync on a directory throws -- but only
+        // reached when `left` is zero, which means everything under it has
+        // already gone, so there is nothing for the recursion to find.
+        rmSync(dir, { recursive: true });
+      } catch {
+        /* a directory that will not go is not worth a line on the board */
+      }
+    }
+    return left > 0;
+  };
+  walk(base, "");
 }
 
 /**
