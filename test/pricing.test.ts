@@ -18,7 +18,7 @@ import {
 import { calibrationFor, MIN_SESSIONS } from "../src/calibrate.js";
 import { advance, emptyState } from "../src/transcript.js";
 import { toTask } from "../src/claude.js";
-import { hostAllowed, originAllowed } from "../src/server.js";
+import { allowHostname, allowedHostnames, hostAllowed, originAllowed } from "../src/server.js";
 import { checkCwd, checkPrompt, reprompt, stopSession } from "../src/actions.js";
 import { laneForOtter } from "../src/otter.js";
 
@@ -255,5 +255,49 @@ describe("otter federation", () => {
     expect(laneForOtter("running")).toBe("running");
     expect(laneForOtter("queued")).toBe("queued");
     expect(laneForOtter("anything-new")).toBe("ended");
+  });
+});
+
+describe("host allow-list for reverse proxies", () => {
+  // The Host check is what stops DNS rebinding, so widening it is the one
+  // change here that could reopen a real hole. These pin the shape of the
+  // widening: one name at a time, never a wildcard, and loopback unaffected.
+  it("refuses a tailnet name until it is explicitly allowed", () => {
+    expect(hostAllowed("localflow.example.ts.net", 7317)).toBe(false);
+    allowHostname("localflow.example.ts.net");
+    expect(hostAllowed("localflow.example.ts.net", 7317)).toBe(true);
+  });
+
+  it("ignores a wildcard, which would turn the check off entirely", () => {
+    allowHostname("*");
+    expect(hostAllowed("evil.example", 7317)).toBe(false);
+    expect(allowedHostnames()).not.toContain("*");
+  });
+
+  it("still refuses an unrelated domain once one name is allowed", () => {
+    allowHostname("localflow.example.ts.net");
+    expect(hostAllowed("evil.example", 7317)).toBe(false);
+    expect(hostAllowed("attacker.localflow.example.ts.net", 7317)).toBe(false);
+  });
+
+  it("accepts an allowed name on the proxy's port, not ours", () => {
+    // Behind https the Host carries no port, or the proxy's — requiring OUR
+    // port would reject every proxied request, which is the bug being fixed.
+    allowHostname("localflow.example.ts.net");
+    expect(hostAllowed("localflow.example.ts.net", 7317)).toBe(true);
+    expect(hostAllowed("localflow.example.ts.net:443", 7317)).toBe(true);
+  });
+
+  it("leaves loopback behaviour exactly as it was", () => {
+    allowHostname("localflow.example.ts.net");
+    expect(hostAllowed("localhost:7317", 7317)).toBe(true);
+    expect(hostAllowed("localhost:9999", 7317)).toBe(false);
+    expect(hostAllowed(undefined, 7317)).toBe(false);
+  });
+
+  it("accepts an Origin from an allowed host, and no other", () => {
+    allowHostname("localflow.example.ts.net");
+    expect(originAllowed("https://localflow.example.ts.net", 7317)).toBe(true);
+    expect(originAllowed("https://evil.example", 7317)).toBe(false);
   });
 });

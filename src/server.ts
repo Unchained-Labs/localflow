@@ -110,6 +110,40 @@ export interface ServerOptions extends BoardOptions {
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
 
+/**
+ * Extra names this server will answer to, named one at a time.
+ *
+ * The Host check exists to stop DNS rebinding: a hostile page resolves its own
+ * domain to 127.0.0.1 and drives this server from your browser, and the
+ * give-away is a `Host` header that is not this machine. That protection is
+ * why the board could not go on a tailnet — a reverse proxy forwards the
+ * tailnet name in `Host`, so every request came back 403.
+ *
+ * A tailnet name is safe to allow and a wildcard is not, which is why this is
+ * an explicit list rather than an off switch. `localflow.example.ts.net`
+ * resolves only inside a WireGuard network you had to be authenticated to
+ * join; an attacker's page cannot make a browser send that Host to you unless
+ * they are already on your tailnet, at which point the Host header is not what
+ * is protecting you. Allowing `*` would readmit the entire original attack.
+ */
+const extraHostnames = new Set<string>();
+
+/** Allow one additional Host value, e.g. a tailnet name. Lower-cased. */
+export function allowHostname(name: string): void {
+  const trimmed = name.trim().toLowerCase();
+  // A wildcard would turn the check off, which is the one thing it must not do.
+  if (trimmed && trimmed !== "*") extraHostnames.add(trimmed);
+}
+
+/** Visible for tests; the set is module state so the server can be told once. */
+export function allowedHostnames(): string[] {
+  return [...LOCAL_HOSTNAMES, ...extraHostnames];
+}
+
+function knownHost(name: string): boolean {
+  return LOCAL_HOSTNAMES.has(name) || extraHostnames.has(name);
+}
+
 /** True when the `Host` header names this machine rather than someone's domain. */
 export function hostAllowed(hostHeader: string | undefined, port: number): boolean {
   if (!hostHeader) return false;
@@ -118,8 +152,11 @@ export function hostAllowed(hostHeader: string | undefined, port: number): boole
   if (!m) return false;
   const name = m[1]!.toLowerCase();
   const p = m[2];
-  if (p && Number(p) !== port) return false;
-  return LOCAL_HOSTNAMES.has(name);
+  // An explicitly allowed name arrives through a proxy on ITS port (443 for
+  // https), not ours — so the port equality that makes sense for a direct
+  // loopback request would reject every proxied one.
+  if (p && Number(p) !== port && !extraHostnames.has(name)) return false;
+  return knownHost(name);
 }
 
 /** True when the request either came from our own page or from no page at all. */
@@ -127,7 +164,11 @@ export function originAllowed(origin: string | undefined, port: number): boolean
   if (!origin || origin === "null") return true; // curl, fetch from a script, same-origin GET
   try {
     const u = new URL(origin);
-    return LOCAL_HOSTNAMES.has(u.hostname.toLowerCase()) && (!u.port || Number(u.port) === port);
+    const name = u.hostname.toLowerCase();
+    // Same reasoning as the port skip above: a page served through the proxy
+    // has the proxy's port in its Origin, not ours.
+    if (extraHostnames.has(name)) return true;
+    return LOCAL_HOSTNAMES.has(name) && (!u.port || Number(u.port) === port);
   } catch {
     return false;
   }

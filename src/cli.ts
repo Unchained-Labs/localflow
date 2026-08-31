@@ -28,7 +28,7 @@ import { devicesPath, loadDevices } from "./devices.js";
 import { Fleet, mirrorRoot } from "./mirror.js";
 import { notesFor, observedSpec } from "./graph.js";
 import { PRICING_VERIFIED, pricingAgeDays } from "./pricing.js";
-import { LocalflowServer } from "./server.js";
+import { LocalflowServer, allowHostname } from "./server.js";
 import { renderBoard } from "./render.js";
 import { computeMetrics } from "./metrics.js";
 import { listSessions } from "./sessions.js";
@@ -99,6 +99,10 @@ OPTIONS
                            by the same reader as local ones. Off by default.
   --remote-poll MS         how often devices are polled (default 10000)
   --allow-root PATH        restrict spawn to a directory (repeatable)
+  --allow-host NAME        answer to this Host besides localhost, e.g. a
+                           tailnet name (repeatable, or LOCALFLOW_ALLOWED_HOSTS).
+                           Needed behind a reverse proxy: it forwards its own
+                           hostname and the rebinding check refuses unknowns.
   --history N              ended sessions to keep on the board (default 10)
   --tokens                 also write per-call token counts from calibrate. Off by
                            default: a session's context is not a worker's payload.
@@ -588,6 +592,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   const host = flag(argv, "--host") ?? "127.0.0.1";
+
+  // Names this server will answer to besides localhost. Needed to sit behind a
+  // reverse proxy (a tailnet node, say): the proxy forwards ITS hostname in
+  // `Host`, and the DNS-rebinding check refuses anything it does not know, so
+  // without this every proxied request comes back 403. Named one at a time on
+  // purpose — see allowHostname() for why a wildcard is not offered.
+  for (const name of [
+    ...flags(argv, "--allow-host"),
+    ...(process.env.LOCALFLOW_ALLOWED_HOSTS ?? "").split(",").filter(Boolean),
+  ]) {
+    allowHostname(name);
+  }
+
   const server = new LocalflowServer({
     ...common,
     port: Number(flag(argv, "--port") ?? 7317),
