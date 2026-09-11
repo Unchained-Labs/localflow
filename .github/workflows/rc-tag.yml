@@ -1,0 +1,85 @@
+# Tag every merged pull request as a release candidate.
+#
+# A merged PR is a thing that exists and nothing named it. This gives each one
+# an immutable handle — v0.4.0-rc.7 — so "which build is running" has an answer
+# that is not a commit sha, and a rollback target exists before anybody needs
+# one.
+#
+# The version comes from the repo's own manifest, never from this file: a
+# version living in two places is a version that disagrees with itself. The rc
+# number is the commit count since the last release tag, so it rises on its own
+# and resets when a real release is cut.
+name: rc-tag
+
+# `pull_request: closed` + `merged == true` is the literal event, and it catches
+# every merge method. Sniffing "Merge pull request" out of commit messages on
+# push does not — squash merges do not produce that message, which is how this
+# kind of workflow ends up silently tagging nothing.
+on:
+  pull_request:
+    types: [closed]
+
+# Tagging is a write. Nothing else here needs a token.
+permissions:
+  contents: write
+
+# Two PRs merged seconds apart must not race into the same tag name.
+concurrency:
+  group: rc-tag-${{ github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base branch as it is AFTER the merge — the merge commit itself.
+          ref: ${{ github.event.pull_request.base.ref }}
+          # Tags and full history, or the rc count is always 1.
+          fetch-depth: 0
+
+      - name: Work out the version
+        id: v
+        run: |
+          set -euo pipefail
+          version=""
+          if [ -f pyproject.toml ]; then
+            version="$(grep -m1 -E '^version[[:space:]]*=' pyproject.toml \
+                       | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+          fi
+          if [ -z "$version" ] && [ -f package.json ]; then
+            version="$(node -p "require('./package.json').version || ''" 2>/dev/null || true)"
+          fi
+          # npm writes 0.0.0 as a placeholder; it is not a claim about anything.
+          if [ -z "$version" ] || [ "$version" = "0.0.0" ]; then
+            version="$(git tag -l 'v*' --sort=-v:refname \
+                       | grep -vE -- '-rc\.' | head -1 | sed 's/^v//' || true)"
+          fi
+          [ -n "$version" ] || version="0.1.0"
+
+          base="v$version"
+          if git rev-parse -q --verify "refs/tags/$base" >/dev/null; then
+            n="$(git rev-list --count "$base"..HEAD)"
+          else
+            n="$(git rev-list --count HEAD)"
+          fi
+          echo "tag=v${version}-rc.${n}" >> "$GITHUB_OUTPUT"
+          echo "Version $version, rc $n" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tag it
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release candidate: #${PR} merged into ${GITHUB_REF_NAME}"
+          git push origin "$TAG"
+          echo "Tagged **$TAG**" >> "$GITHUB_STEP_SUMMARY"
