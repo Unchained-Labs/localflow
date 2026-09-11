@@ -127,6 +127,13 @@ export interface RunState {
   detail: string;
   /** Sum of what the CLI reported. Null while nothing priced has finished. */
   costUsd: number | null;
+  /**
+   * Set when this run was read back out of the history archive rather than
+   * driven by this process. Such a run is complete but thinner than it was —
+   * node output and per-node timings are not archived — so the UI can say so
+   * instead of showing a finished run with mysteriously empty nodes.
+   */
+  restored?: boolean;
 }
 
 export type RunEvent =

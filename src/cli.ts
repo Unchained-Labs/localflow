@@ -35,6 +35,8 @@ import { listSessions } from "./sessions.js";
 import { humanize, waterFor } from "./water.js";
 import { countTasks, readTasks } from "./tasks.js";
 import type { Task } from "./types.js";
+import { totalTokens } from "./types.js";
+import { backfill, historyDir, pruneHistory, readHistory } from "./history.js";
 
 /**
  * The version, from the package rather than a second copy of it.
@@ -75,6 +77,9 @@ USAGE
   localflow sources                other agent tools here, and how they could be read
                                    (--write puts the result in sources.json)
   localflow sessions [query]       every session on this machine, not just recent ones
+  localflow history [--days N]     every job ever archived, after the transcripts are gone
+  localflow history backfill       seed the archive from the transcripts still on disk
+  localflow history prune --keep N  drop whole months off the back of the archive
   localflow tasks <sessionId>      that session's task list
   localflow metrics                the numbers behind the plots, as JSON
   localflow water                  freshwater these sessions cost, via soif
@@ -104,6 +109,10 @@ OPTIONS
                            Needed behind a reverse proxy: it forwards its own
                            hostname and the rebinding check refuses unknowns.
   --history N              ended sessions to keep on the board (default 10)
+  --no-archive             stop writing the job log in ~/.localflow/history. The board
+                           keeps working; it just forgets again, and the forgetting is
+                           only visible once the transcripts expire.
+  --days N                 window for the history command (default: everything)
   --tokens                 also write per-call token counts from calibrate. Off by
                            default: a session's context is not a worker's payload.
   --poll MS                refresh interval (default 2000)
@@ -317,6 +326,100 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stderr.write(
       `\n  ${archive.total} session(s)${archive.truncated ? `, ${archive.truncated} not shown` : ""}` +
         `${archive.unreadable.length ? `, ${archive.unreadable.length} unreadable director(y|ies)` : ""}\n`,
+    );
+    return 0;
+  }
+
+  if (cmd === "history") {
+    const sub = argv.slice(1).find((a) => !a.startsWith("-"));
+
+    if (sub === "prune") {
+      const keep = Number(flag(argv, "--keep") ?? 12);
+      // Never by default. Deleting history is the one operation here with no undo.
+      const apply = argv.includes("--yes");
+      const r = pruneHistory(keep, { apply });
+      if (format === "json") {
+        process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
+        return 0;
+      }
+      if (!r.remove.length) {
+        process.stderr.write(`\n  nothing to prune — the archive holds ${r.keep.length} month(s)\n\n`);
+        return 0;
+      }
+      for (const f of r.remove) {
+        process.stdout.write(`  ${apply ? "removed" : "would remove"}  ${f.file}  ${(f.bytes / 1e6).toFixed(1)} MB\n`);
+      }
+      process.stderr.write(
+        `\n  ${(r.bytes / 1e6).toFixed(1)} MB across ${r.remove.length} month(s); keeping ${r.keep.length}\n` +
+          `${apply ? "" : "  Nothing was deleted. Add --yes to actually do it.\n"}\n`,
+      );
+      return 0;
+    }
+
+    if (sub === "backfill") {
+      const r = await backfill({ asOf });
+      if (format === "json") {
+        process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
+        return 0;
+      }
+      process.stdout.write(
+        `\n  ${r.scanned} transcript(s) scanned — ${r.written} archived, ${r.skipped} already current` +
+          `${r.failed ? `, ${r.failed} unreadable` : ""}\n` +
+          `${r.dated ? `  ${r.dated} had no usable timestamp of their own and were dated from the file\n` : ""}` +
+          `  archive: ${historyDir()}\n\n`,
+      );
+      return 0;
+    }
+
+    const days = flag(argv, "--days") ? Number(flag(argv, "--days")) : undefined;
+    const result = readHistory({
+      since: days !== undefined && Number.isFinite(days) ? Date.now() - days * 86_400_000 : undefined,
+      project: flag(argv, "--project"),
+      source: flag(argv, "--source"),
+      limit: flag(argv, "--limit") ? Number(flag(argv, "--limit")) : undefined,
+    });
+    const totals = result.totals;
+
+    if (format === "json") {
+      process.stdout.write(`${JSON.stringify({ ...result, totals }, null, 2)}\n`);
+      return 0;
+    }
+
+    if (!result.coverage.rows) {
+      process.stderr.write(
+        `\n  nothing archived yet at ${historyDir()}\n` +
+          "  Run `localflow history backfill` to seed it from the transcripts still on disk,\n" +
+          "  and leave the server running so it keeps up from here.\n\n",
+      );
+      return 0;
+    }
+
+    for (const x of result.sessions) {
+      const when = new Date(x.updatedAt).toISOString().slice(0, 16).replace("T", " ");
+      // "~" marks a date taken from the file rather than the transcript.
+      const mark = x.timeFrom === "mtime" ? "~" : " ";
+      const cost = x.costUsd === null ? "       -" : `$${x.costUsd.toFixed(2)}`.padStart(8);
+      const tok = `${(totalTokens(x.usage) / 1e6).toFixed(1)}M`.padStart(7);
+      process.stdout.write(
+        `  ${mark}${when}  ${cost} ${tok}  ${String(x.turns).padStart(4)}t  ${x.title.slice(0, 44)}\n`,
+      );
+    }
+    for (const r of result.runs) {
+      const when = new Date(r.startedAt).toISOString().slice(0, 16).replace("T", " ");
+      process.stdout.write(`  ${when}  workflow ${r.workflow} — ${r.state}${r.detail ? ` (${r.detail})` : ""}\n`);
+    }
+
+    const span = result.coverage.from
+      ? `${new Date(result.coverage.from).toISOString().slice(0, 10)} to ${new Date(result.coverage.to ?? Date.now()).toISOString().slice(0, 10)}`
+      : "nothing";
+    process.stderr.write(
+      `\n  ${totals.sessions} session(s), ${totals.runs} run(s), ${totals.turns} turns, ` +
+        `${(totals.tokens / 1e6).toFixed(1)}M tokens, ` +
+        `${totals.costUsd === null ? "no priced work" : `$${totals.costUsd.toFixed(2)}`}` +
+        `${totals.unpriced ? ` (+${totals.unpriced} unpriced — a floor, not a total)` : ""}\n` +
+        `  across ${totals.projects} project(s); archive covers ${span}\n` +
+        `${result.partial ? "  the window asked for starts before the archive does — this is a floor\n" : ""}` +
+        `${result.coverage.unreadable ? `  ${result.coverage.unreadable} unreadable row(s) skipped\n` : ""}\n`,
     );
     return 0;
   }
@@ -616,6 +719,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     remotePollMs: Number(flag(argv, "--remote-poll") ?? 10_000),
     allowedRoots: flags(argv, "--allow-root"),
     pollMs: Number(flag(argv, "--poll") ?? 2000),
+    archive: !argv.includes("--no-archive"),
   });
 
   const { url } = await server.start();

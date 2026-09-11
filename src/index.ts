@@ -33,4 +33,6 @@ export { listSessions, registryRows, unslug } from "./sessions.js";
 export type { SessionArchive, SessionRow } from "./sessions.js";
 export { countTasks, createTask, nextId, readTasks, sessionsWithTasks, setTaskStatus } from "./tasks.js";
 export type { AgentTask, TaskCounts, TaskList, TaskStatus } from "./tasks.js";
+export { Archive, backfill, historyDir, historyTotals, pruneHistory, readHistory, runRecord } from "./history.js";
+export type { BackfillResult, Coverage, HistoryQuery, HistoryRecord, HistoryResult, HistoryTotals, PruneResult, RunRecord, SessionRecord } from "./history.js";
 export * from "./types.js";

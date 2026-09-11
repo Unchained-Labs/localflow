@@ -330,6 +330,66 @@ localflow sessions chezmoi    # filtered
 localflow tasks <sessionId>   # that session's task list
 ```
 
+## Every job, ever
+
+`localflow sessions` reads the transcripts that are *still there*. Claude Code
+deletes them on its own schedule — thirty days, unless you changed
+`cleanupPeriodDays` — so on a machine that has been working for a year, the
+question "what did we spend in March" has no answer at all. Not a hidden one. The
+file that would prove it is gone.
+
+So localflow keeps its own copy as it watches, in `~/.localflow/history/`: one
+append-only JSONL file per month, one row per session each time that session
+actually moves, one row per workflow run when it finishes. It is on by default
+and needs nothing set up.
+
+```sh
+localflow history                  # everything archived, newest first
+localflow history --days 30        # a window
+localflow history --project hunter # one project
+localflow history --format json    # for anything else
+localflow history backfill         # fold in the transcripts still on disk
+```
+
+There is a **History** tab on the board showing the same thing, and
+`GET /api/history?days=30&project=x&limit=400` behind it.
+
+Four things about it are deliberate, and all four cost something:
+
+* **It appends and never rewrites.** A row per poll would be a database and a
+  write lock; a row per *change* is a file that a kill -9 can damage only at the
+  last line. A session being watched for nine hours without moving writes
+  nothing.
+* **Rows fold by the session's own clock, not by file order.** That is what makes
+  `backfill` safe to run twice: it appends August observations in September,
+  after rows that are newer than they are, and must not win.
+* **It seeds itself once.** An empty archive on a machine with readable
+  transcripts next to it is a gap nobody could fill in later, so the first start
+  folds them in. `backfill` does the same on demand.
+* **It says how far back it can answer.** Ask for a window that starts before the
+  archive does and the totals come back marked as a floor rather than a total —
+  the same rule the burn rate follows. An archive that reports `$0` for the month
+  before you switched it on is worse than no archive.
+
+What it cannot do is recover what Claude Code already deleted. Run `backfill`
+early; it is the only shot at the window between your first session and the day
+the archive started.
+
+A row is about 650 bytes and one is written every time a session moves, so a
+busy month lands in the tens of megabytes. Months are whole files, which makes
+dropping the oldest ones cheap and safe:
+
+```sh
+localflow history prune --keep 12         # says what it would remove
+localflow history prune --keep 12 --yes   # actually removes it
+```
+
+It never trims *within* a month. Asking for that back would mean rewriting an
+append-only file, which is how append-only files get lost.
+
+`--no-archive` turns it off. The board keeps working — it just goes back to
+forgetting, and the forgetting is not visible until the transcripts expire.
+
 ## Tasks
 
 Claude Code keeps a task list per session under `~/.claude/tasks/`. localflow
