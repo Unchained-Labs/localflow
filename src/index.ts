@@ -35,4 +35,11 @@ export { countTasks, createTask, nextId, readTasks, sessionsWithTasks, setTaskSt
 export type { AgentTask, TaskCounts, TaskList, TaskStatus } from "./tasks.js";
 export { Archive, backfill, historyDir, historyTotals, pruneHistory, readHistory, runRecord } from "./history.js";
 export type { BackfillResult, Coverage, HistoryQuery, HistoryRecord, HistoryResult, HistoryTotals, PruneResult, RunRecord, SessionRecord } from "./history.js";
+export { listCatalogue, parseFrontmatter } from "./commands.js";
+export type { Catalogue, CatalogueItem, CatalogueKind, CatalogueScope } from "./commands.js";
+export {
+  deleteWorkflow, listWorkflows, nodeKind, nodePrompt, nodeTitle, planOf, readWorkflow, runWorkflow, saveWorkflow,
+  validate as validateWorkflow, workflowsDir,
+} from "./workflow.js";
+export type { NodeRun, RunEvent, RunPlan, RunState, WorkflowEdge, WorkflowNode, WorkflowSpec } from "./workflow.js";
 export * from "./types.js";

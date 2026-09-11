@@ -41,31 +41,47 @@
 <main id="board" class="board" aria-label="Agent sessions across the fleet"></main>
 
 <section id="workflows" class="workflows" aria-label="Workflows">
-  <aside class="wf-list">
-    <div class="wf-list-head">
+  <aside class="wf-side">
+    <div class="wf-side-head">
       <h3>Workflows</h3>
-      <button class="btn btn-quiet" id="wf-new">new</button>
+      <button class="btn btn-quiet" id="wf-new">+ new</button>
     </div>
+    <div id="wf-items" class="wf-items"></div>
     <p class="blurb" id="wf-dir"></p>
-    <div id="wf-items"></div>
+
+    <div class="wf-side-head">
+      <h3>Steps</h3>
+    </div>
+    <input id="wf-q" class="input" type="search" placeholder="filter commands, skills, agents" aria-label="Filter steps">
+    <p class="blurb">Drag one onto the canvas, or click it to add after the selected step.</p>
+    <div id="wf-palette"></div>
   </aside>
 
   <div class="wf-main">
     <div class="wf-bar">
-      <strong id="wf-name">—</strong>
+      <input id="wf-name" class="wf-name" type="text" spellcheck="false" aria-label="Workflow name" placeholder="name">
+      <span class="wf-dot" id="wf-dirty" title="unsaved changes" hidden>●</span>
       <span class="wf-status" id="wf-status"></span>
       <span class="wf-spacer"></span>
-      <button class="btn" id="wf-check">check</button>
-      <button class="btn" id="wf-save">save</button>
-      <button class="btn primary" id="wf-run">run</button>
+      <button class="btn" id="wf-check" title="lint and price it before it spends a token">check</button>
+      <button class="btn" id="wf-save" title="⌘S">save</button>
+      <button class="btn primary" id="wf-run" title="save, then start it — it lands on the board as one card">▶ run</button>
+      <span class="wf-menu-wrap">
+        <button class="btn" id="wf-more" aria-label="More">⋯</button>
+        <div class="wf-menu" id="wf-menu" hidden>
+          <button id="wf-force">run, ignoring the gates</button>
+          <button id="wf-dup">duplicate</button>
+          <button id="wf-export">download .graph.json</button>
+          <button id="wf-delete" class="danger">delete</button>
+        </div>
+      </span>
     </div>
     <div class="wf-canvas" id="wf-canvas"></div>
     <div class="wf-report" id="wf-report" hidden></div>
+    <div class="wf-runs" id="wf-runs"></div>
   </div>
 
-  <aside class="wf-inspect" id="wf-inspect">
-    <p class="blurb">Select a node to edit it, or add one.</p>
-  </aside>
+  <aside class="wf-inspect" id="wf-inspect"></aside>
 </section>
 
 <section id="metrics" class="metrics" aria-label="Observed metrics"></section>

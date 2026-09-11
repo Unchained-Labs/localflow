@@ -108,6 +108,33 @@ describe("Archive.record", () => {
   });
 });
 
+describe("Archive.recordRun", () => {
+  it("keeps the plan a run carried, so a restored run can still draw its chain", () => {
+    const dir = home();
+    const a = new Archive(dir);
+    a.recordRun({
+      id: "run-1",
+      workflow: "audit",
+      startedAt: 1_000,
+      endedAt: 5_000,
+      state: "done",
+      detail: "",
+      costUsd: 0.5,
+      nodes: [{ id: "scope", state: "done", sessionId: "s1", costUsd: 0.5, output: "kilobytes of text" }],
+      plan: {
+        cwd: "/w",
+        nodes: [{ id: "scope", label: "Scope", kind: "prompt", width: 1 }],
+        edges: [],
+      },
+    });
+    const { runs } = readHistory({}, dir);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.plan?.nodes[0]).toMatchObject({ id: "scope", label: "Scope" });
+    // Output is not archived: the ledger records that it happened, not what it said.
+    expect(JSON.stringify(runs[0])).not.toContain("kilobytes");
+  });
+});
+
 describe("readHistory", () => {
   it("treats a machine with no archive as empty, not as an error", () => {
     const r = readHistory({}, join(tmpdir(), "definitely-not-here"));

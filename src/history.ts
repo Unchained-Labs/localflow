@@ -51,7 +51,7 @@ import { join } from "node:path";
 
 import { totalTokens } from "./types.js";
 import type { Lane, Outcome, Task, Usage } from "./types.js";
-import type { RunState } from "./workflow.js";
+import type { RunPlan, RunState } from "./workflow.js";
 
 /** One observation of one session. Everything a card showed, minus what only the transcript can answer. */
 export interface SessionRecord {
@@ -111,6 +111,8 @@ export interface RunRecord {
   costUsd: number | null;
   /** Per-node outcome, flattened: enough to say what failed without the live object. */
   nodes: { id: string; state: string; sessionId?: string; costUsd: number | null }[];
+  /** The graph the run was started from, so a restored run can still draw its chain. */
+  plan?: RunPlan;
 }
 
 export type HistoryRecord = SessionRecord | RunRecord;
@@ -248,6 +250,7 @@ export function runRecord(r: RunState, at: number): RunRecord {
       sessionId: n.sessionId,
       costUsd: n.costUsd ?? null,
     })),
+    ...(r.plan ? { plan: r.plan } : {}),
   };
 }
 

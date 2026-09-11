@@ -13,10 +13,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  deleteWorkflow,
   dependencies,
   fillPrompt,
   findCycle,
   listWorkflows,
+  nodePrompt,
+  nodeTitle,
+  planOf,
   readWorkflow,
   runWorkflow,
   saveWorkflow,
@@ -95,6 +99,72 @@ describe("validation", () => {
   it("reports every problem, not the first", () => {
     const bad = validate(spec({ nodes: [{ id: "a", prompt: "" }, { id: "a", prompt: "" }], edges: [] }));
     expect(bad.length).toBeGreaterThan(2);
+  });
+});
+
+describe("command steps", () => {
+  it("sends a slash command as the prompt, with its arguments after it", () => {
+    expect(nodePrompt({ prompt: "", command: "/review", args: "{{input}}" })).toBe("/review {{input}}");
+    // The slash is optional in the file and always present on the wire.
+    expect(nodePrompt({ prompt: "", command: "review" })).toBe("/review");
+    expect(nodePrompt({ prompt: "plain", command: undefined })).toBe("plain");
+  });
+
+  it("validates a command step by what it would send", () => {
+    const ok = validate(spec({ nodes: [{ id: "r", prompt: "", command: "/review", args: "the diff" }], edges: [] }));
+    expect(ok).toEqual([]);
+    const bad = validate(spec({ nodes: [{ id: "r", prompt: "", command: "not a command" }], edges: [] }));
+    expect(bad.some((p) => /not a slash command name/.test(p.message))).toBe(true);
+  });
+
+  it("runs a command step by handing the runner the command text", async () => {
+    const { seen, execute } = recorder();
+    await runWorkflow(
+      spec({
+        nodes: [
+          { id: "scope", prompt: "map it" },
+          { id: "review", prompt: "", command: "/review", args: "focus on: {{input}}" },
+        ],
+        edges: [{ from: "scope", to: "review" }],
+      }),
+      { execute, ...NO_GATES },
+    );
+    expect(seen[1]?.prompt).toBe("/review focus on: output of scope");
+  });
+
+  it("titles a step by its label, else its command, else its first line", () => {
+    expect(nodeTitle({ id: "a", prompt: "x", label: "Scope it" })).toBe("Scope it");
+    expect(nodeTitle({ id: "a", prompt: "x", command: "review" })).toBe("/review");
+    expect(nodeTitle({ id: "a", prompt: "\nFirst line here\nsecond" })).toBe("First line here");
+  });
+});
+
+describe("the plan a run carries", () => {
+  it("snapshots the graph at start, so a later edit cannot redraw a finished run", async () => {
+    const { execute } = recorder();
+    const s = spec({
+      nodes: [
+        { id: "scope", prompt: "map", label: "Map it", model: "sonnet" },
+        { id: "panel", prompt: "check {{index}}", fanout: { over: "agents", width: 3 } },
+        { id: "review", prompt: "", command: "/review", agent: "reviewer" },
+      ],
+      edges: [{ from: "scope", to: "panel" }, { from: "panel", to: "review" }],
+    });
+    const run = await runWorkflow(s, { execute, ...NO_GATES });
+    expect(run.plan).toEqual(planOf(s));
+    expect(run.plan?.nodes).toEqual([
+      { id: "scope", label: "Map it", kind: "prompt", model: "sonnet", agent: undefined, command: undefined, width: 1 },
+      { id: "panel", label: "check {{index}}", kind: "prompt", model: undefined, agent: undefined, command: undefined, width: 3 },
+      { id: "review", label: "/review", kind: "command", model: undefined, agent: "reviewer", command: "/review", width: 1 },
+    ]);
+    expect(run.plan?.edges).toEqual([{ from: "scope", to: "panel" }, { from: "panel", to: "review" }]);
+    expect(run.plan?.cwd).toBe(dir);
+  });
+
+  it("is carried even by a refused run, so the card can still show the shape", async () => {
+    const run = await runWorkflow(spec({ nodes: [{ id: "a", prompt: "" }], edges: [] }), { ...NO_GATES });
+    expect(run.state).toBe("refused");
+    expect(run.plan?.nodes.map((n) => n.id)).toEqual(["a"]);
   });
 });
 
@@ -309,6 +379,15 @@ describe("storage", () => {
     const rows = listWorkflows(d);
     expect(rows[0]?.error).toBeTruthy();
     expect(rows[0]?.spec).toBeUndefined();
+  });
+
+  it("deletes by name and refuses a name that is a path", () => {
+    const d = mkdtempSync(`${tmpdir()}/lf-store-`);
+    saveWorkflow(spec(), d);
+    expect(deleteWorkflow("../demo", d).ok).toBe(false);
+    expect(deleteWorkflow("nope", d).ok).toBe(false);
+    expect(deleteWorkflow("demo", d).ok).toBe(true);
+    expect(listWorkflows(d)).toEqual([]);
   });
 
   it("treats a missing directory as no workflows, not an error", () => {

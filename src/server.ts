@@ -28,14 +28,16 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { extname, join, normalize, resolve as resolvePath } from "node:path";
 
-import { reprompt, reroute, spawnAgent, stopSession } from "./actions.js";
+import { checkCwd, reprompt, reroute, spawnAgent, stopSession } from "./actions.js";
 import type { ActionContext } from "./actions.js";
 import { Board } from "./board.js";
 import type { BoardOptions } from "./board.js";
 import { notesFor, observedSpec } from "./graph.js";
 import { NO_VERDICTS, estimateGap, estimateObserved, lensPlan, lintObserved } from "./family.js";
+import { listCatalogue } from "./commands.js";
 import {
   budgetGate,
+  deleteWorkflow,
   familySpec,
   lintGate,
   listWorkflows,
@@ -360,6 +362,7 @@ export class LocalflowServer {
           detail: r.detail,
           costUsd: r.costUsd,
           restored: true,
+          plan: r.plan,
           nodes: r.nodes.map((n) => ({
             id: n.id,
             state: n.state as never,
@@ -418,6 +421,7 @@ export class LocalflowServer {
         if (this.archive.error) summary.degraded.push({ id: "history", reason: this.archive.error });
       }
 
+      this.stampRuns(summary);
       this.latest = summary;
       this.lastError = null;
     } catch (e) {
@@ -426,8 +430,39 @@ export class LocalflowServer {
     this.broadcast();
   }
 
+  /**
+   * Which card belongs to which run.
+   *
+   * A node's session is a normal session and lands on the board like any other;
+   * this is the one fact the transcript cannot carry — that it was step three of
+   * a chain somebody composed — stamped on from the run that started it. The
+   * runs themselves ride along on the same frame, so the board can show the
+   * chain as one card beside the sessions it produced.
+   */
+  private stampRuns(summary: BoardSummary): void {
+    const bySession = new Map<string, { run: string; workflow: string; node: string }>();
+    for (const r of this.runs.values()) {
+      for (const n of r.nodes) if (n.sessionId) bySession.set(n.sessionId, { run: r.id, workflow: r.workflow, node: n.id });
+    }
+    for (const t of summary.tasks) {
+      const hit = bySession.get(t.id);
+      if (hit) t.workflow = hit;
+    }
+    summary.runs = this.recentRuns();
+  }
+
+  /** Runs for the board: everything live, plus the last few that finished. */
+  private recentRuns(limit = 40): RunState[] {
+    return [...this.runs.values()]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, limit)
+      // The board does not need node output, which can be kilobytes per node.
+      .map((r) => ({ ...r, nodes: r.nodes.map(({ output, ...n }) => ({ ...n, hasOutput: Boolean(output) })) }));
+  }
+
   private broadcast(): void {
     if (!this.clients.size) return;
+    if (this.latest) this.latest.runs = this.recentRuns();
     const payload = JSON.stringify(this.latest ?? { error: this.lastError });
     for (const c of this.clients) {
       // A slow reader must not wedge the poll loop; if the socket has gone the
@@ -612,17 +647,42 @@ export class LocalflowServer {
       return send(res, 200, { workflows: listWorkflows(), dir: workflowsDir() });
     }
 
+    // What a step can be: the slash commands, skills and agents on this disk.
+    // Read-only, like listing workflows. A project directory adds its own
+    // `.claude/` to the scan, held to the same roots as everything that runs.
+    if (url.pathname === "/api/commands") {
+      const cwd = url.searchParams.get("cwd") ?? "";
+      const cwdProblem = cwd ? checkCwd(cwd, this.actionCtx()) : null;
+      const cat = listCatalogue({ ...this.opts, cwd: cwd && !cwdProblem ? cwd : undefined });
+      return send(res, 200, { ...cat, cwd: cwd || null, cwdProblem });
+    }
+
     if (url.pathname === "/api/workflows/runs") {
       return send(res, 200, { runs: [...this.runs.values()].sort((a, b) => b.startedAt - a.startedAt) });
     }
 
     if (url.pathname === "/api/workflows/runs/events") return this.streamRuns(req, res);
 
+    // One run in full, node output included. The board frame strips output
+    // because a chain of five steps can carry fifty kilobytes of it.
+    const oneRun = /^\/api\/workflows\/runs\/([^/]+)$/.exec(url.pathname);
+    if (oneRun && req.method === "GET") {
+      const run = this.runs.get(decodeURIComponent(oneRun[1]!));
+      if (!run) return send(res, 404, { error: "no such run" });
+      return send(res, 200, { run });
+    }
+
     const wf = /^\/api\/workflows\/([^/]+)$/.exec(url.pathname);
     if (wf && req.method === "GET") {
       const spec = readWorkflow(decodeURIComponent(wf[1]!));
       if (!spec) return send(res, 404, { error: "no such workflow" });
       return send(res, 200, { spec, problems: validateWorkflow(spec, this.actionCtx()) });
+    }
+    if (wf && req.method === "DELETE") {
+      // Editing a file, like save. Runs already started keep their own copy of
+      // the graph, so deleting the file does not blank a card on the board.
+      const out = deleteWorkflow(decodeURIComponent(wf[1]!));
+      return send(res, out.ok ? 200 : 404, out);
     }
 
     if (url.pathname.startsWith("/api/workflows/")) {
@@ -752,13 +812,19 @@ export class LocalflowServer {
         ...this.actionCtx(),
         runId,
         force: body.force === true,
-        maxConcurrent: typeof body.maxConcurrent === "number" ? body.maxConcurrent : undefined,
+        maxConcurrent: typeof body.maxConcurrent === "number" ? body.maxConcurrent : spec.concurrency,
         onEvent: (e) => {
           if (e.type === "run") this.runs.set(e.run.id, e.run);
           this.publishRun(e);
+          // The board carries runs too, and a node finishing is the kind of
+          // change a card should show without waiting for the next poll.
+          if (this.latest) this.stampRuns(this.latest);
+          this.broadcast();
         },
       }).then((final) => {
         this.runs.set(final.id, final);
+        if (this.latest) this.stampRuns(this.latest);
+        this.broadcast();
         // Terminal only. A row per event would make the ledger a transcript of
         // the run rather than a record that it happened.
         this.archive?.recordRun(final);
