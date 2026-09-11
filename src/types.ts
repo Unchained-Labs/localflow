@@ -207,10 +207,19 @@ export interface Task {
   partial?: boolean;
   /** Set while this card is the last known state of a device we cannot currently reach. */
   staleSince?: number;
+  /** Set when a workflow run started this session, naming the run and the step. */
+  workflow?: { run: string; workflow: string; node: string };
 }
 
 export interface BoardSummary {
   tasks: Task[];
+  /**
+   * Workflow runs, newest first: the live ones and the last few that finished.
+   *
+   * Only present on a board served by the server, because only the server
+   * drives runs. Node output is stripped; the run endpoint still has it.
+   */
+  runs?: import("./workflow.js").RunState[];
   lanes: Record<Lane, number>;
   totals: { usage: Usage; costUsd: number | null; sessions: number; cacheHitRate: number | null };
   /** Sessions the registry lists that we could not enrich, and why. */

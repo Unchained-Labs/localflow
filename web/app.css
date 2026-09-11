@@ -481,74 +481,248 @@ body[data-view="history"] .board { display: none; }
 
 /* ---- workflows -----------------------------------------------------------
  *
- * Three columns: what exists, what it looks like, and what the selected node
- * is. The canvas uses the same shapes as the observed graph in the drawer —
- * a workflow and the run it produced are the same kind of object, and drawing
- * them differently would suggest otherwise.
+ * Three panes: what a step can be, the chain, the step you clicked. The chain
+ * is drawn left to right in the order it will run, with the same states a run
+ * paints onto it — a workflow and the run it produced are the same object.
  */
-.workflows { display: none; grid-template-columns: 15rem 1fr 20rem; gap: 1px; background: var(--ul-line); height: calc(100vh - 58px); }
-.workflows > * { background: var(--ul-bg); overflow-y: auto; padding: 0.9rem; }
+.workflows { display: none; grid-template-columns: 17rem minmax(0, 1fr) 22rem; gap: 1px; background: var(--ul-line); height: calc(100vh - 58px); }
+.workflows > * { background: var(--ul-bg); overflow-y: auto; min-width: 0; }
+@media (max-width: 1100px) { .workflows { grid-template-columns: 15rem minmax(0, 1fr); } .wf-inspect { grid-column: 1 / -1; max-height: 40vh; } }
 
-.wf-list .blurb { overflow-wrap: anywhere; font-size: 11px; }
-.wf-list-head { display: flex; align-items: center; justify-content: space-between; }
-.wf-list-head h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); }
-.wf-item { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; width: 100%; text-align: left; margin-top: 0.3rem; padding: 0.45rem 0.6rem; border-radius: 6px; background: var(--ul-bg-raised); border: 1px solid var(--ul-line); color: var(--ul-body); cursor: pointer; font: inherit; }
+.wf-side { padding: 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.wf-side .blurb { overflow-wrap: anywhere; font-size: 11px; margin: 0.2rem 0; }
+.wf-side-head { display: flex; align-items: center; justify-content: space-between; margin-top: 0.4rem; }
+.wf-side-head h3 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); }
+.wf-items { display: flex; flex-direction: column; gap: 0.3rem; max-height: 32vh; overflow-y: auto; }
+.wf-item { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; width: 100%; text-align: left; padding: 0.42rem 0.6rem; border-radius: 6px; background: var(--ul-bg-raised); border: 1px solid var(--ul-line); color: var(--ul-body); cursor: pointer; font: inherit; }
 .wf-item:hover { border-color: var(--ul-accent-dim); }
 .wf-item.on { border-color: var(--ul-accent); }
-.wf-item-name { font-family: var(--ul-font-mono, monospace); font-size: 12px; color: var(--ul-heading); }
-.wf-item-n { font-size: 11px; color: var(--ul-faint); }
+.wf-item-name { font-family: var(--ul-font-mono, monospace); font-size: 12px; color: var(--ul-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-item-n { font-size: 10.5px; color: var(--ul-faint); white-space: nowrap; font-family: var(--ul-font-mono, monospace); }
+.wf-item-n.running { color: var(--ul-accent); }
+.wf-item-n.done { color: var(--ul-up); }
+.wf-item-n.failed, .wf-item-n.refused { color: var(--ul-down); }
 .wf-item-bad { font-size: 11px; color: var(--ul-down); }
 
-.wf-main { display: flex; flex-direction: column; padding: 0; }
-.wf-bar { display: flex; align-items: center; gap: 0.5rem; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--ul-line); }
-.wf-bar strong { font-family: var(--ul-font-mono, monospace); font-size: 13px; color: var(--ul-heading); }
+/* The palette: chips you drag onto the canvas. The glyph says what kind of
+   step it makes — ¶ a prompt, / a command or skill, @ a subagent. */
+.wf-pal-sec h4 { margin: 0.6rem 0 0.3rem; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); font-weight: 600; }
+.wf-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.wf-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem; max-width: 100%;
+  font: inherit; font-size: 11.5px; padding: 0.25rem 0.5rem 0.25rem 0.4rem;
+  border-radius: 999px; border: 1px solid var(--ul-line-strong); background: var(--ul-bg-raised); color: var(--ul-body);
+  cursor: grab;
+}
+.wf-chip:hover { border-color: var(--ul-accent); color: var(--ul-heading); }
+.wf-chip:active { cursor: grabbing; }
+.wf-chip .name { font-family: var(--ul-font-mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-chip .scope { font-size: 9.5px; color: var(--ul-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.glyph { font-family: var(--ul-font-mono, monospace); font-weight: 700; font-size: 10.5px; width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--ul-bg); background: var(--ul-muted); }
+.kind-command .glyph, .kind-skill .glyph { background: var(--ul-accent); }
+.kind-agent .glyph { background: var(--viz-6); }
+.kind-prompt .glyph, .kind-panel .glyph { background: var(--ul-muted); }
+
+/* The middle pane. */
+.wf-main { display: flex; flex-direction: column; padding: 0; min-height: 0; }
+.wf-bar { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--ul-line); flex: none; position: relative; }
+.wf-name { font-family: var(--ul-font-mono, monospace); font-size: 13px; color: var(--ul-heading); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0.3rem 0.45rem; min-width: 8rem; width: 16rem; }
+.wf-name:hover, .wf-name:focus { border-color: var(--ul-line-strong); background: var(--ul-bg-inset, #0B0F13); outline: none; }
+.wf-dot { color: var(--ul-warn); font-size: 10px; }
 .wf-spacer { flex: 1; }
-.wf-status { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-faint); }
+.wf-status { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-faint); white-space: nowrap; }
 .wf-status.running { color: var(--ul-accent); }
 .wf-status.failed, .wf-status.refused { color: var(--ul-down); }
 .wf-status.done { color: var(--ul-up); }
+.wf-menu-wrap { position: relative; }
+.wf-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 14rem; display: flex; flex-direction: column; background: var(--ul-bg-raised); border: 1px solid var(--ul-line); border-radius: 8px; padding: 0.3rem; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
+.wf-menu button { font: inherit; font-size: 12.5px; text-align: left; background: none; border: 0; color: var(--ul-body); padding: 0.45rem 0.6rem; border-radius: 6px; cursor: pointer; }
+.wf-menu button:hover { background: var(--ul-bg-inset, #0B0F13); color: var(--ul-heading); }
+.wf-menu button.danger:hover { color: var(--ul-down); }
 
-.wf-canvas { flex: 1; overflow: auto; padding: 0.9rem; background: var(--ul-bg-inset, #0B0F13); }
-.wf-svg { display: block; margin: 0 auto; }
-
+.wf-canvas { flex: 1; overflow: auto; background: var(--ul-bg-inset, #0B0F13); background-image: radial-gradient(color-mix(in srgb, var(--ul-line-strong) 60%, transparent) 1px, transparent 1px); background-size: 22px 22px; min-height: 0; position: relative; }
+.wf-stage { position: relative; }
+.wf-stage.over { outline: 2px dashed var(--ul-accent); outline-offset: -8px; }
+.wf-lines { position: absolute; inset: 0; pointer-events: none; }
+.wf-lines .wf-edge-hit { pointer-events: stroke; }
 .wf-edge { fill: none; stroke: var(--ul-line-strong); stroke-width: 1.5px; }
-.wf-edge.barrier { stroke: var(--ul-accent-dim); }
+.wf-edge.flowed { stroke: var(--ul-up); }
+.wf-edge.sel { stroke: var(--ul-accent); stroke-width: 2px; }
+.wf-edge.temp { stroke: var(--ul-accent); stroke-dasharray: 4 3; }
+.wf-edge-hit { fill: none; stroke: transparent; stroke-width: 14px; cursor: pointer; }
 .wf-arrow { fill: var(--ul-line-strong); }
+.wf-arrow.sel { fill: var(--ul-accent); }
+.wf-edge-cut { position: absolute; transform: translate(-50%, -50%); width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--ul-accent); background: var(--ul-bg-raised); color: var(--ul-accent); font-size: 13px; line-height: 1; cursor: pointer; z-index: 3; }
 
-.wf-n rect { fill: var(--ul-bg-raised); stroke: var(--ul-line); stroke-width: 1px; }
-.wf-n { cursor: pointer; }
-.wf-n:hover rect { stroke: var(--ul-accent-dim); }
-.wf-n.sel rect { stroke: var(--ul-accent); stroke-width: 1.5px; }
-.wf-n.running rect { stroke: var(--ul-accent); fill: var(--ul-accent-wash); }
-.wf-n.done rect { stroke: var(--ul-up); }
-.wf-n.failed rect { stroke: var(--ul-down); fill: var(--ul-down-wash); }
-.wf-n.skipped rect { stroke-dasharray: 3 3; }
+/* A step. The left port is what it waits for, the right port is what it
+   produces; the two + buttons put a step after it or alongside it. */
+.wf-node {
+  position: absolute; box-sizing: border-box;
+  background: var(--ul-bg-raised); border: 1px solid var(--ul-line-strong); border-radius: 9px;
+  padding: 0.5rem 0.7rem 0.45rem; cursor: pointer; z-index: 2;
+  display: flex; flex-direction: column; gap: 0.2rem;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.wf-stage.editable .wf-node:hover { border-color: var(--ul-accent-dim); }
+.wf-node.sel { border-color: var(--ul-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ul-accent) 22%, transparent); }
+.wf-node.target { border-color: var(--ul-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ul-accent) 30%, transparent); }
+.wf-node.bad { border-color: var(--ul-warn); }
+.wf-node:focus-visible { outline: 2px solid var(--ul-accent); outline-offset: 2px; }
+.wf-node.state-running { border-color: var(--ul-accent); background: var(--ul-accent-wash); animation: wf-pulse 1.6s ease-in-out infinite; }
+.wf-node.state-done { border-color: var(--ul-up); }
+.wf-node.state-failed { border-color: var(--ul-down); background: var(--ul-down-wash); }
+.wf-node.state-skipped { border-style: dashed; opacity: 0.7; }
+@keyframes wf-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ul-accent) 35%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--ul-accent) 0%, transparent); } }
+.wf-node-head { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.wf-node-head .title { font-size: 12.5px; font-weight: 600; color: var(--ul-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.wf-node-head .width { font-family: var(--ul-font-mono, monospace); font-size: 10.5px; color: var(--ul-warn); flex: none; }
+.wf-node-meta { font-family: var(--ul-font-mono, monospace); font-size: 10.5px; color: var(--ul-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-node-state { font-family: var(--ul-font-mono, monospace); font-size: 10.5px; color: var(--ul-muted); }
+.wf-node-state.running { color: var(--ul-accent); }
+.wf-node-state.done { color: var(--ul-up); }
+.wf-node-state.failed { color: var(--ul-down); }
+.wf-node-dot { position: absolute; top: -4px; right: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--ul-faint); border: 2px solid var(--ul-bg-inset, #0B0F13); }
+.wf-node-dot.running { background: var(--ul-accent); }
+.wf-node-dot.done { background: var(--ul-up); }
+.wf-node-dot.failed { background: var(--ul-down); }
+.wf-node-dot.skipped { background: transparent; border-color: var(--ul-faint); }
 
-.wf-id { font-family: var(--ul-font-mono, monospace); font-size: 12px; fill: var(--ul-heading); }
-.wf-meta { font-family: var(--ul-font-mono, monospace); font-size: 10px; fill: var(--ul-faint); }
-.wf-prompt { font-family: var(--ul-font-body, system-ui), sans-serif; font-size: 10px; fill: var(--ul-muted); }
+.wf-stage.readonly .wf-node { cursor: default; padding: 0.35rem 0.55rem; justify-content: center; }
+.wf-stage.readonly .wf-node-head .title { font-size: 11px; }
 
-.wf-report { border-top: 1px solid var(--ul-line); padding: 0.6rem 0.9rem; max-height: 8rem; overflow-y: auto; }
+.port { position: absolute; top: 50%; width: 11px; height: 11px; border-radius: 50%; background: var(--ul-bg); border: 2px solid var(--ul-line-strong); transform: translateY(-50%); z-index: 3; }
+.port.in { left: -6px; }
+.port.out { right: -6px; cursor: crosshair; }
+.wf-node:hover .port, .wf-node.sel .port { border-color: var(--ul-accent); }
+.port.out:hover { background: var(--ul-accent); }
+body.wf-connecting, body.wf-connecting * { cursor: crosshair !important; user-select: none; }
+
+.wf-add {
+  position: absolute; width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--ul-line-strong); background: var(--ul-bg-raised); color: var(--ul-muted);
+  font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 120ms ease; z-index: 4;
+}
+.wf-add.then { right: -34px; top: 50%; transform: translateY(-50%); }
+.wf-add.beside { bottom: -24px; left: 50%; transform: translateX(-50%); }
+.wf-node:hover .wf-add, .wf-node.sel .wf-add, .wf-node:focus-within .wf-add { opacity: 1; }
+.wf-add:hover { border-color: var(--ul-accent); color: var(--ul-accent); }
+
+/* Drop zones, visible only while a chip is being dragged. */
+.dz { display: none; position: absolute; align-items: center; justify-content: center; font-size: 10.5px; font-family: var(--ul-font-mono, monospace); color: var(--ul-accent); border: 1.5px dashed var(--ul-accent-dim); border-radius: 7px; background: var(--ul-bg-inset, #0B0F13); z-index: 5; }
+.dz.after { right: -70px; top: 4px; bottom: 4px; width: 62px; }
+.dz.beside { left: 10%; right: 10%; bottom: -22px; height: 18px; }
+body.wf-dragging .dz { display: flex; }
+.dz.over { border-style: solid; border-color: var(--ul-accent); background: var(--ul-accent-wash); }
+
+.wf-empty { padding: 2.5rem 2rem; max-width: 42rem; margin: 0 auto; text-align: center; }
+.wf-empty.small { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; padding: 0; }
+.wf-empty h3 { margin: 0 0 0.4rem; color: var(--ul-heading); font-size: 16px; }
+.wf-empty p { margin: 0 0 1.2rem; color: var(--ul-muted); font-size: 13px; line-height: 1.5; }
+.wf-templates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; text-align: left; }
+.wf-template { font: inherit; display: flex; flex-direction: column; gap: 0.2rem; padding: 0.7rem 0.8rem; border-radius: 8px; border: 1px solid var(--ul-line); background: var(--ul-bg-raised); color: var(--ul-body); cursor: pointer; }
+.wf-template:hover { border-color: var(--ul-accent); }
+.wf-template b { color: var(--ul-heading); font-size: 12.5px; }
+.wf-template span { font-size: 11.5px; color: var(--ul-faint); line-height: 1.4; }
+
+.wf-report { border-top: 1px solid var(--ul-line); padding: 0.5rem 0.9rem; max-height: 7rem; overflow-y: auto; flex: none; }
 .wf-line { font-size: 12px; line-height: 1.55; padding: 1px 0; color: var(--ul-body); }
-.wf-line.ok { color: var(--ul-body); }
 .wf-line.warn { color: var(--ul-warn); }
 .wf-line.bad { color: var(--ul-down); }
 
-.wf-field { display: block; margin-top: 0.7rem; }
-.wf-field > span { display: block; font-size: 11px; color: var(--ul-faint); margin-bottom: 0.25rem; }
+/* The runs strip under the canvas: one chip per run, click to paint it on. */
+.wf-runs { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; padding: 0.45rem 0.9rem; border-top: 1px solid var(--ul-line); flex: none; }
+.wf-runs .blurb { margin: 0; }
+.wf-runs-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); margin-right: 0.2rem; }
+.wf-runchip { display: inline-flex; align-items: center; gap: 0.4rem; font: inherit; font-family: var(--ul-font-mono, monospace); font-size: 11px; padding: 0.25rem 0.6rem; border-radius: 999px; border: 1px solid var(--ul-line); background: var(--ul-bg-raised); color: var(--ul-muted); cursor: pointer; }
+.wf-runchip i { width: 7px; height: 7px; border-radius: 50%; background: var(--ul-faint); }
+.wf-runchip.running i { background: var(--ul-accent); }
+.wf-runchip.done i { background: var(--ul-up); }
+.wf-runchip.failed i, .wf-runchip.refused i { background: var(--ul-down); }
+.wf-runchip.on { border-color: var(--ul-accent); color: var(--ul-heading); }
+
+/* The inspector. */
+.wf-inspect { padding: 0.9rem; }
+.wf-inspect h4 { margin: 0 0 0.4rem; font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); font-family: var(--ul-font-mono, monospace); }
+.wf-seg { display: inline-flex; border: 1px solid var(--ul-line-strong); border-radius: 7px; overflow: hidden; margin: 0.2rem 0 0.4rem; }
+.wf-seg-btn { font: inherit; font-size: 12px; padding: 0.3rem 0.7rem; background: transparent; border: 0; color: var(--ul-muted); cursor: pointer; }
+.wf-seg-btn.on { background: var(--ul-accent); color: var(--ul-bg); font-weight: 600; }
+.wf-field { display: block; margin-top: 0.65rem; }
+.wf-field > span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ul-faint); margin-bottom: 0.25rem; }
+.wf-field > small { display: block; font-size: 11px; color: var(--ul-faint); margin-top: 0.25rem; line-height: 1.45; }
 .wf-field input, .wf-field textarea, .wf-field select {
-  width: 100%; background: var(--ul-bg-inset, #0B0F13); color: var(--ul-body);
-  border: 1px solid var(--ul-line); border-radius: 6px; padding: 0.4rem 0.5rem;
-  font-family: var(--ul-font-mono, monospace); font-size: 11.5px;
+  display: block; width: 100%; background: var(--ul-bg-inset, #0B0F13); color: var(--ul-body);
+  border: 1px solid var(--ul-line); border-radius: 6px; padding: 0.45rem 0.55rem; font: inherit; font-size: 12.5px;
 }
-.wf-actions { display: flex; gap: 0.4rem; }
-.btn-quiet.danger { color: var(--ul-down); border-color: var(--ul-down); margin-top: 0.9rem; }
+.wf-field textarea { resize: vertical; line-height: 1.45; }
+.wf-field .mono, .wf-field textarea { font-family: var(--ul-font-mono, monospace); font-size: 12px; }
+.wf-field input:focus, .wf-field textarea:focus, .wf-field select:focus { outline: none; border-color: var(--ul-accent); }
+.wf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.wf-inserts { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }
+.wf-inserts > span { font-size: 10.5px; color: var(--ul-faint); }
+.wf-inserts .btn-quiet { font-family: var(--ul-font-mono, monospace); }
+.wf-deps { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+.wf-deps .blurb { margin: 0; }
+.wf-deps select { width: auto; font-size: 11.5px; padding: 0.2rem 0.4rem; background: var(--ul-bg-inset, #0B0F13); color: var(--ul-muted); border: 1px solid var(--ul-line); border-radius: 6px; }
+.wf-dep { display: inline-flex; align-items: center; gap: 0.3rem; font-family: var(--ul-font-mono, monospace); font-size: 11.5px; padding: 0.15rem 0.3rem 0.15rem 0.5rem; border-radius: 999px; border: 1px solid var(--ul-line-strong); color: var(--ul-body); }
+.wf-dep button { background: none; border: 0; color: var(--ul-faint); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 0.2rem; }
+.wf-dep button:hover { color: var(--ul-down); }
+.wf-problem { margin-top: 0.7rem; padding: 0.5rem 0.6rem; border-left: 2px solid var(--ul-warn); color: var(--ul-warn); font-size: 12px; line-height: 1.5; }
+.wf-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.9rem; }
 .wf-runinfo { margin-top: 1rem; border-top: 1px solid var(--ul-line); padding-top: 0.6rem; }
-.wf-runinfo h4 { margin: 0 0 0.4rem; font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ul-faint); }
-.wf-runline { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-muted); padding: 1px 0; }
+.wf-runline { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-muted); padding: 2px 0; }
 .wf-runline.failed { color: var(--ul-down); }
 .wf-runline.done { color: var(--ul-up); }
 .wf-runline.skipped { color: var(--ul-faint); }
+.wf-runline.running { color: var(--ul-accent); }
+.wf-runline-detail { color: var(--ul-body); font-family: var(--ul-font-body, system-ui), sans-serif; font-size: 11.5px; margin: 2px 0; }
+.wf-runline .prompt { margin-top: 0.3rem; }
+
+/* ---- a run on the board ---------------------------------------------------
+ * One card for the whole chain, in the lane the runner's state puts it in.
+ * The chips are the steps, in the columns they ran in. */
+.card.run { border-left: 2px solid var(--ul-accent); }
+.card.run.failed, .card.run.refused { border-left-color: var(--ul-down); }
+.card.run.done { border-left-color: var(--ul-up); }
+.card.run h3 .src { color: var(--ul-accent); border-color: var(--ul-accent-dim); }
+.meta .run-state { color: var(--ul-heading); }
+.meta .run-state.running { color: var(--ul-accent); }
+.meta .run-state.done { color: var(--ul-up); }
+.meta .run-state.failed, .meta .run-state.refused { color: var(--ul-down); }
+.chain { display: flex; align-items: center; gap: 0.25rem; overflow-x: auto; padding-bottom: 2px; }
+.chain-col { display: flex; flex-direction: column; gap: 0.2rem; flex: none; }
+.chain-arrow { color: var(--ul-faint); font-size: 14px; flex: none; }
+.chain-step {
+  display: inline-flex; align-items: center; gap: 0.3rem; max-width: 11rem;
+  font-family: var(--ul-font-mono, monospace); font-size: 10.5px; padding: 0.15rem 0.45rem 0.15rem 0.25rem;
+  border-radius: 5px; border: 1px solid var(--ul-line-strong); color: var(--ul-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chain-step .glyph { width: 13px; height: 13px; font-size: 9px; border-radius: 3px; }
+.chain-step b { color: var(--ul-warn); font-weight: 500; }
+.chain-step.running { border-color: var(--ul-accent); background: var(--ul-accent-wash); color: var(--ul-heading); }
+.chain-step.done { border-color: var(--ul-up); }
+.chain-step.failed { border-color: var(--ul-down); background: var(--ul-down-wash); }
+.chain-step.skipped { border-style: dashed; color: var(--ul-faint); }
+.chain-step.pending { color: var(--ul-faint); }
+.chain-step.more { border-style: dotted; color: var(--ul-faint); }
+
+/* The run drawer. */
+.wf-dag { overflow: auto; padding: 0; }
+.wf-dag .wf-stage { margin: 0 auto; }
+.wf-steps { display: flex; flex-direction: column; gap: 0.5rem; }
+.wf-step { border-left: 2px solid var(--ul-line-strong); padding: 0.3rem 0 0.3rem 0.7rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.wf-step.running { border-color: var(--ul-accent); }
+.wf-step.done { border-color: var(--ul-up); }
+.wf-step.failed { border-color: var(--ul-down); }
+.wf-step.skipped { border-style: dashed; }
+.wf-step-head { display: flex; align-items: center; gap: 0.5rem; font-size: 12.5px; }
+.wf-step-head b { color: var(--ul-heading); font-weight: 600; }
+.wf-step-head .state { font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-muted); }
+.wf-step-head .state.running { color: var(--ul-accent); }
+.wf-step-head .state.done { color: var(--ul-up); }
+.wf-step-head .state.failed { color: var(--ul-down); }
+.wf-step-head .cost { margin-left: auto; font-family: var(--ul-font-mono, monospace); font-size: 11px; color: var(--ul-heading); }
+.wf-step-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.wf-step-row .prompt { width: 100%; }
 
 
 /* ---- fleet bar ----------------------------------------------------------

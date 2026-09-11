@@ -527,9 +527,35 @@ localflow workflows          # what is in ~/.localflow/workflows
 localflow run audit          # lint it, price it, then run it
 ```
 
-Or the **Workflows** tab: pick one, see it as a graph, click a node to edit its
-prompt, model, effort, directory and fan-out width, then check, save and run it
-while the nodes light up.
+Or the **Workflows** tab, which is a node editor. The left pane lists what a
+step can be: a plain prompt, a fan-out panel, and **every slash command, skill
+and subagent actually installed on this machine** — read from
+`~/.claude/commands`, `~/.claude/skills`, `~/.claude/agents`, the project's
+`.claude/` and any plugins. Drag one onto the canvas, or click it to chain it
+after the selected step. A step after another runs when it finishes; steps
+stacked in a column run in parallel; `×3` on a step is a panel of three copies.
+Drag from a step's output port to another step to make that one wait for it.
+Click a step to set its prompt or command, model, effort, subagent, directory
+and width. Then **run** — it saves first — and the chain lights up as it goes.
+
+**Every run is one card on the board**, in `running` while the runner is
+working and in `ended` once it has said how it finished, with the whole chain
+drawn on it. Open it for the step-by-step: state, measured cost, the session
+each step started, and its output. The sessions themselves stay on the board
+as ordinary cards and say which step of which run they were. Runs are written
+to the history archive when they finish, so the chain you started before lunch
+is still there — as a chain — when you come back, and after a restart.
+
+A step that is a slash command is stored as one, so the file says `/review`
+rather than a prompt that happens to start with a slash:
+
+```json
+{ "id": "review", "command": "/review", "args": "focus on: {{input}}", "agent": "code-reviewer" }
+```
+
+Built-in CLI commands are not offered in the palette: nothing on disk says
+which ones the installed version has, and a list typed from memory would be a
+guess wearing a catalogue's clothes. Type one into a command step by hand.
 
 A workflow is a `*.graph.json` — **the same document graphlint lints and
 preflight prices**, with the fields execution needs added to each node. That is

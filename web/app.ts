@@ -61,6 +61,8 @@ interface Task {
   partial?: boolean;
   /** Last known state of a device that is not answering right now. */
   staleSince?: number;
+  /** Set when a workflow run started this session. */
+  workflow?: { run: string; workflow: string; node: string };
 }
 
 /**
@@ -159,6 +161,8 @@ interface Board {
   generatedAt: number;
   pricingVerified?: string;
   error?: string;
+  /** Workflow runs, live and recent. The server strips node output. */
+  runs?: RunState[];
 }
 
 const LANES: { lane: Lane; label: string; blurb: string }[] = [
@@ -169,21 +173,13 @@ const LANES: { lane: Lane; label: string; blurb: string }[] = [
 ];
 
 import { OTHER, breakdown, histogram, seriesColor, statTile, timeBars } from "./charts.js";
-
-const $ = <T extends Element = HTMLElement>(sel: string) => document.querySelector(sel) as T;
+import { $, age, el, innerWidthOf, money, shortModel, svg, tilde, titled, toast, tokens } from "./dom.js";
+import { openRunDrawer, renderWorkflows, runCard, wireWorkflows } from "./workflows.js";
+import type { RunState } from "./workflows.js";
 
 let board: Board | null = null;
 let selected: string | null = null;
 let actionsEnabled = false;
-
-// ---- formatting -------------------------------------------------------------
-
-function tokens(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
-  return String(n);
-}
 
 /**
  * True when a session yielded nothing worth a card.
@@ -194,57 +190,6 @@ function tokens(n: number): string {
  */
 function isBare(t: Task): boolean {
   return !t.model && t.costUsd === null && !t.cwd && !t.usage.output;
-}
-
-function money(usd: number | null): string {
-  if (usd === null) return "—";
-  if (usd >= 100) return `$${usd.toFixed(0)}`;
-  if (usd >= 1) return `$${usd.toFixed(2)}`;
-  return `$${usd.toFixed(3)}`;
-}
-
-function age(ms: number): string {
-  if (!ms) return "—";
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  if (s < 90) return `${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 90) return `${m}m`;
-  const h = Math.round(m / 60);
-  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
-}
-
-const shortModel = (m?: string) => (m ? m.replace(/^claude-/, "").replace(/-\d{8}$/, "") : "");
-const tilde = (p: string) => p.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> & { class?: string } = {},
-  ...kids: (Node | string | null | undefined)[]
-): HTMLElementTagNameMap[K] {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k === "class") n.className = String(v);
-    else if (v !== undefined && v !== null) (n as Record<string, unknown>)[k] = v;
-  }
-  for (const kid of kids) if (kid != null) n.append(kid as Node | string);
-  return n;
-}
-
-// ---- toasts -----------------------------------------------------------------
-
-/** An element's usable width: what is inside its own padding. */
-function innerWidthOf(node: HTMLElement, fallback = 520): number {
-  const w = node.clientWidth;
-  if (!w) return fallback;
-  const cs = getComputedStyle(node);
-  const inner = w - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0");
-  return inner > 80 ? inner : fallback;
-}
-
-function toast(msg: string, kind: "ok" | "err" | "info" = "info", ms = 6000): void {
-  const t = el("div", { class: `toast ${kind}` }, msg);
-  $("#toasts").append(t);
-  setTimeout(() => t.remove(), ms);
 }
 
 // ---- rendering --------------------------------------------------------------
@@ -496,6 +441,11 @@ function renderFleet(b: Board): void {
   }
 }
 
+/** Where a run sits. Running while the runner is; ended once it has said how it finished. */
+function runLane(r: RunState): Lane {
+  return r.state === "running" ? "running" : "ended";
+}
+
 function renderBoard(b: Board): void {
   const host = $("#board");
   const existing = new Map<string, HTMLElement>();
@@ -510,13 +460,25 @@ function renderBoard(b: Board): void {
   host.replaceChildren(
     ...LANES.map(({ lane, label, blurb }) => {
       const all = shown.filter((t) => t.lane === lane);
+      const runsHere = fleetFilter ? 0 : (b.runs ?? []).filter((r) => runLane(r) === lane).length;
       // A transcript we could read nothing out of still produced a task, and a
       // full card for it sat next to a four-figure session claiming the same
       // amount of attention. They collapse to one line instead.
       const inLane = all.filter((t) => !isBare(t));
       const bare = all.filter(isBare);
+      // A workflow run is one card for the whole chain, in the lane its state
+      // puts it in: running while any step is, ended once the runner has said
+      // how it finished. It sits above the sessions it started, which stay on
+      // the board as themselves and say which step they were.
+      const runs = fleetFilter ? [] : (b.runs ?? []).filter((r) => runLane(r) === lane);
       const body = el("div", { class: "lane-body" });
-      if (!all.length) body.append(el("p", { class: "empty" }, blurb));
+      if (!all.length && !runs.length) body.append(el("p", { class: "empty" }, blurb));
+      for (const r of runs) {
+        const prev = existing.get(`run:${r.id}`);
+        const fresh = runCard(r);
+        if (prev && prev.innerHTML === fresh.innerHTML) body.append(prev);
+        else body.append(fresh);
+      }
       for (const t of inLane) {
         // Reuse the node when nothing on the card changed, so hover and focus
         // survive a poll.
@@ -545,7 +507,7 @@ function renderBoard(b: Board): void {
           { class: "lane-head" },
           el("i", { class: "dot" } as never),
           label,
-          el("span", { class: "n" }, String(all.length)),
+          el("span", { class: "n" }, String(all.length + runsHere)),
         ),
         body,
       );
@@ -582,8 +544,6 @@ function renderBoard(b: Board): void {
 // are the real edges, and when the widest layer does not fit the panel scrolls
 // sideways rather than shrinking the text until it stops being text.
 
-const NS = "http://www.w3.org/2000/svg";
-
 /** Geometry. Pixels, all of them, because the drawing is never rescaled. */
 const NODE_W = 116;
 const NODE_H = 46;
@@ -595,23 +555,6 @@ const CAPTION_H = 16;
 const ROOT_W = 168;
 /** Below this the boxes stop holding a readable word, so the panel scrolls instead. */
 const MIN_NODE_W = 84;
-
-/** Attach a `<title>`, which is how an SVG node gets a tooltip. */
-function titled<T extends SVGElement>(node: T, text: string): T {
-  const t = document.createElementNS(NS, "title");
-  t.textContent = text;
-  node.append(t);
-  return node;
-}
-
-function svg<K extends keyof SVGElementTagNameMap>(
-  tag: K,
-  attrs: Record<string, string | number> = {},
-): SVGElementTagNameMap[K] {
-  const n = document.createElementNS(NS, tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
-  return n;
-}
 
 /**
  * Fit a label into a box, in lines.
@@ -974,6 +917,7 @@ async function openDrawer(id: string): Promise<void> {
   add("lane", t.lane);
   add("status", t.status);
   add("session", t.id);
+  if (t.workflow) add("workflow", `${t.workflow.workflow} · step ${t.workflow.node}`);
   if (t.model) add("model", t.model);
   if (t.effort) add("effort", t.effort);
   if (t.cwd) add("cwd", t.cwd);
@@ -987,6 +931,19 @@ async function openDrawer(id: string): Promise<void> {
     add("outcome", t.outcome === "errors-seen" ? "tool errors were seen" : "not recorded");
   }
   body.append(el("section", { class: "sec" }, el("h4", {}, "session"), kv));
+  if (t.workflow) {
+    const wf = t.workflow;
+    const open = el("button", { class: "btn btn-quiet" }, `open the ${wf.workflow} run`);
+    open.addEventListener("click", () => void openRunDrawer(wf.run));
+    body.append(
+      el(
+        "p",
+        { class: "hint" },
+        `This session was step "${wf.node}" of a workflow run. `,
+        open,
+      ),
+    );
+  }
 
   if (t.lastPrompt) {
     body.append(
@@ -1255,7 +1212,7 @@ function wireDnD(): void {
 
   document.addEventListener("dragstart", (e) => {
     const c = (e.target as HTMLElement).closest<HTMLElement>(".card");
-    if (!c) return;
+    if (!c || c.dataset.run) return;
     dragId = c.dataset.id!;
     c.classList.add("dragging");
     e.dataTransfer?.setData("text/plain", dragId);
@@ -1304,6 +1261,8 @@ function apply(b: Board): void {
   board = b;
   renderTotals(b);
   renderBoard(b);
+  // The workflow editor seeds its run list from here until its own stream is up.
+  dispatchEvent(new Event("localflow:board"));
   $("#live").className = "pill live on";
   $("#live").replaceChildren(el("i", {} as never), `live · ${new Date(b.generatedAt).toLocaleTimeString()}`);
   if (selected) void openDrawer(selected);
@@ -1374,23 +1333,33 @@ async function init(): Promise<void> {
     /* the board still renders; the badge just stays at its default */
   }
 
+  const openCard = (c: HTMLElement) => {
+    if (c.dataset.run) void openRunDrawer(c.dataset.run);
+    else void openDrawer(c.dataset.id!);
+  };
   document.addEventListener("click", (e) => {
     const c = (e.target as HTMLElement).closest<HTMLElement>(".card");
-    if (c) void openDrawer(c.dataset.id!);
+    if (c && !c.closest(".drawer")) openCard(c);
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeDrawer();
     const c = document.activeElement?.closest<HTMLElement>(".card");
     if (c && (e.key === "Enter" || e.key === " ")) {
       e.preventDefault();
-      void openDrawer(c.dataset.id!);
+      openCard(c);
     }
   });
   $("#d-close").addEventListener("click", closeDrawer);
   $("#scrim").addEventListener("click", closeDrawer);
   $("#new-task").addEventListener("click", () => openDialog("spawn"));
   wireViews();
-  wireWorkflows();
+  wireWorkflows({
+    board: () => board,
+    actionsEnabled: () => actionsEnabled,
+    setView: (v) => setView(v as View),
+    openSession: (id) => void openDrawer(id),
+    closeDrawer,
+  });
   wireDialog();
   wireDnD();
   connect();
@@ -2243,523 +2212,3 @@ async function renderDevices(): Promise<void> {
 }
 
 
-/* ---------------------------------------------------------------------------
- * Workflows: the graph you write, rather than the one you ran
- *
- * Same visual language as the drawer's observed graph on purpose. A workflow
- * and the run it produced are the same kind of object — nodes, edges, a barrier
- * between groups — and drawing them differently would suggest they are not.
- *
- * The canvas lays out by longest path from a root, so the picture comes from
- * the edges rather than from stored coordinates. Nothing to drag means nothing
- * to leave stale: delete a node and the layout is still correct, which is not
- * true of any editor that remembers where you put things.
- * ------------------------------------------------------------------------- */
-
-interface WfNode {
-  id: string;
-  prompt: string;
-  cwd?: string;
-  model?: string;
-  effort?: string;
-  agent?: string;
-  phase?: string;
-  tier?: string;
-  fanout?: { over: string; width: number };
-}
-
-interface WfEdge { from: string; to: string; channel?: string; barrier?: boolean; barrierReason?: string }
-
-interface WfSpec {
-  name: string;
-  description?: string;
-  cwd?: string;
-  budget?: { usd?: number | null; tokens?: number | null };
-  nodes: WfNode[];
-  edges: WfEdge[];
-}
-
-interface NodeRun {
-  id: string;
-  state: "pending" | "running" | "done" | "failed" | "skipped";
-  index?: number;
-  sessionId?: string;
-  costUsd?: number;
-  output?: string;
-  detail?: string;
-}
-
-interface RunState {
-  id: string;
-  workflow: string;
-  startedAt: number;
-  endedAt?: number;
-  state: "running" | "done" | "failed" | "refused";
-  nodes: NodeRun[];
-  detail: string;
-  costUsd: number | null;
-}
-
-let wfSpec: WfSpec | null = null;
-let wfSelected: string | null = null;
-let wfDirty = false;
-/** Latest state per node id, from the run stream. */
-let wfRun: RunState | null = null;
-let wfStream: EventSource | null = null;
-
-const WF_NODE_W = 150;
-const WF_NODE_H = 56;
-const WF_GAP_X = 22;
-const WF_LAYER_GAP = 66;
-
-/** Longest path from a root: a node sits below everything it depends on. */
-function wfLayers(spec: WfSpec): string[][] {
-  const deps = new Map<string, string[]>();
-  for (const n of spec.nodes) deps.set(n.id, []);
-  for (const e of spec.edges ?? []) {
-    if (deps.has(e.to) && deps.has(e.from)) deps.get(e.to)!.push(e.from);
-  }
-
-  const depth = new Map<string, number>();
-  const visiting = new Set<string>();
-  const of = (id: string): number => {
-    if (depth.has(id)) return depth.get(id)!;
-    // A cycle cannot be laid out, and the editor must survive one long enough
-    // for you to fix it — validation is what refuses to *run* it.
-    if (visiting.has(id)) return 0;
-    visiting.add(id);
-    const d = (deps.get(id) ?? []).reduce((a, p) => Math.max(a, of(p) + 1), 0);
-    visiting.delete(id);
-    depth.set(id, d);
-    return d;
-  };
-
-  const rows: string[][] = [];
-  for (const n of spec.nodes) {
-    const d = of(n.id);
-    (rows[d] ??= []).push(n.id);
-  }
-  return rows.map((r) => r ?? []);
-}
-
-/** Where every node sits, in pixels. */
-function wfLayout(spec: WfSpec, available: number) {
-  const rows = wfLayers(spec);
-  const widest = Math.max(1, ...rows.map((r) => r.length));
-  const width = Math.max(available, widest * WF_NODE_W + (widest - 1) * WF_GAP_X + 48);
-  const height = 24 + rows.length * WF_NODE_H + Math.max(0, rows.length - 1) * WF_LAYER_GAP + 24;
-  const at = new Map<string, { x: number; y: number }>();
-
-  rows.forEach((row, r) => {
-    const rowW = row.length * WF_NODE_W + (row.length - 1) * WF_GAP_X;
-    const x0 = (width - rowW) / 2;
-    row.forEach((id, i) => {
-      at.set(id, { x: x0 + i * (WF_NODE_W + WF_GAP_X), y: 24 + r * (WF_NODE_H + WF_LAYER_GAP) });
-    });
-  });
-  return { at, width, height, rows };
-}
-
-/** Per-node run state, collapsed from the per-child rows the runner emits. */
-function wfStateOf(id: string): NodeRun["state"] | null {
-  const rows = (wfRun?.nodes ?? []).filter((n) => n.id === id);
-  if (!rows.length) return null;
-  if (rows.some((r) => r.state === "failed")) return "failed";
-  if (rows.some((r) => r.state === "running")) return "running";
-  if (rows.some((r) => r.state === "skipped")) return "skipped";
-  return rows.every((r) => r.state === "done") ? "done" : "pending";
-}
-
-function wfCanvas(spec: WfSpec, available: number): SVGSVGElement {
-  const { at, width, height } = wfLayout(spec, available);
-  const root = svg("svg", { width, height, class: "wf-svg" });
-
-  // Edges first so the boxes sit on top of them.
-  for (const e of spec.edges ?? []) {
-    const a = at.get(e.from);
-    const b = at.get(e.to);
-    if (!a || !b) continue;
-    const x1 = a.x + WF_NODE_W / 2;
-    const y1 = a.y + WF_NODE_H;
-    const x2 = b.x + WF_NODE_W / 2;
-    const y2 = b.y;
-    const mid = (y1 + y2) / 2;
-    const path = svg("path", {
-      class: `wf-edge${e.barrier ? " barrier" : ""}`,
-      d: `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`,
-      "marker-end": "url(#wf-arrow)",
-    });
-    titled(path, e.barrierReason ?? (e.barrier ? "barrier" : e.channel ?? ""));
-    root.append(path);
-  }
-
-  const defs = svg("defs", {});
-  const marker = svg("marker", {
-    id: "wf-arrow", viewBox: "0 0 8 8", refX: 7, refY: 4,
-    markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse",
-  });
-  marker.append(svg("path", { d: "M 0 1 L 7 4 L 0 7 z", class: "wf-arrow" }));
-  defs.append(marker);
-  root.append(defs);
-
-  for (const n of spec.nodes) {
-    const p = at.get(n.id);
-    if (!p) continue;
-    const state = wfStateOf(n.id);
-    const g = svg("g", {
-      class: `wf-n${state ? ` ${state}` : ""}${wfSelected === n.id ? " sel" : ""}`,
-      role: "button",
-      tabindex: 0,
-    });
-    g.append(svg("rect", { x: p.x, y: p.y, width: WF_NODE_W, height: WF_NODE_H, rx: 8 }));
-
-    const id = svg("text", { class: "wf-id", x: p.x + 11, y: p.y + 20 });
-    id.textContent = n.id;
-    g.append(id);
-
-    const meta = svg("text", { class: "wf-meta", x: p.x + 11, y: p.y + 36 });
-    meta.textContent = [n.model, n.fanout ? `×${n.fanout.width}` : null].filter(Boolean).join(" · ") || "default model";
-    g.append(meta);
-
-    const prompt = svg("text", { class: "wf-prompt", x: p.x + 11, y: p.y + 49 });
-    prompt.textContent = fitLabel(n.prompt.replace(/\s+/g, " "), WF_NODE_W - 8, 1)[0] ?? "";
-    g.append(prompt);
-
-    titled(g, n.prompt);
-    g.addEventListener("click", () => {
-      wfSelected = n.id;
-      renderWorkflowBody();
-    });
-    root.append(g);
-  }
-  return root;
-}
-
-/* ---- the tab ------------------------------------------------------------ */
-
-async function renderWorkflows(): Promise<void> {
-  const items = $("#wf-items");
-  items.textContent = "loading…";
-  let data: { workflows: { name: string; error?: string; spec?: WfSpec }[]; dir: string };
-  try {
-    data = await (await fetch("/api/workflows")).json();
-  } catch (e) {
-    items.textContent = `could not read workflows: ${String(e)}`;
-    return;
-  }
-
-  $("#wf-dir").textContent = `Files in ${tilde(data.dir)} — plain graph specs, diffable and reviewable.`;
-  items.textContent = "";
-  if (!data.workflows.length) {
-    items.append(el("p", { class: "blurb" }, "None yet. `new` starts one."));
-  }
-  for (const w of data.workflows) {
-    const row = el("button", { class: `wf-item${wfSpec?.name === w.name ? " on" : ""}` });
-    row.append(el("span", { class: "wf-item-name" }, w.name));
-    if (w.error) row.append(el("span", { class: "wf-item-bad" }, "unreadable"));
-    else row.append(el("span", { class: "wf-item-n" }, `${w.spec?.nodes.length ?? 0} nodes`));
-    row.addEventListener("click", () => void openWorkflow(w.name));
-    items.append(row);
-  }
-
-  if (!wfSpec && data.workflows[0]?.spec) await openWorkflow(data.workflows[0].name);
-  else renderWorkflowBody();
-  watchRuns();
-}
-
-async function openWorkflow(name: string): Promise<void> {
-  try {
-    const r = await fetch(`/api/workflows/${encodeURIComponent(name)}`);
-    if (!r.ok) return;
-    const { spec } = (await r.json()) as { spec: WfSpec };
-    wfSpec = spec;
-    wfSelected = spec.nodes[0]?.id ?? null;
-    wfDirty = false;
-    wfRun = null;
-    renderWorkflowBody();
-    void renderWorkflows();
-  } catch {
-    /* the list is still usable */
-  }
-}
-
-function renderWorkflowBody(): void {
-  const canvas = $("#wf-canvas");
-  canvas.textContent = "";
-  $("#wf-name").textContent = wfSpec ? `${wfSpec.name}${wfDirty ? " ·" : ""}` : "—";
-
-  if (!wfSpec) {
-    canvas.append(el("p", { class: "blurb" }, "Pick a workflow, or start a new one."));
-    return;
-  }
-  canvas.append(wfCanvas(wfSpec, innerWidthOf(canvas, 760)));
-  renderInspector();
-}
-
-/** The panel that edits whatever is selected. */
-function renderInspector(): void {
-  const host = $("#wf-inspect");
-  host.textContent = "";
-  if (!wfSpec) return;
-
-  const add = el("div", { class: "wf-actions" });
-  const addNode = el("button", { class: "btn btn-quiet" }, "+ node");
-  addNode.addEventListener("click", () => {
-    const id = uniqueNodeId(wfSpec!);
-    wfSpec!.nodes.push({ id, prompt: "Describe what this step should do." });
-    // Wired to whatever is selected, because an unconnected node is a node
-    // that runs first and alone — rarely what you meant by adding it here.
-    if (wfSelected) wfSpec!.edges.push({ from: wfSelected, to: id });
-    wfSelected = id;
-    wfDirty = true;
-    renderWorkflowBody();
-  });
-  add.append(addNode);
-  host.append(add);
-
-  const n = wfSpec.nodes.find((x) => x.id === wfSelected);
-  if (!n) {
-    host.append(el("p", { class: "blurb" }, "Select a node to edit it."));
-    return;
-  }
-
-  const field = (label: string, value: string, onInput: (v: string) => void, area = false) => {
-    const wrap = el("label", { class: "wf-field" }, el("span", {}, label));
-    const input = area ? document.createElement("textarea") : document.createElement("input");
-    if (area) (input as HTMLTextAreaElement).rows = 6;
-    input.value = value;
-    input.addEventListener("input", () => {
-      onInput(input.value);
-      wfDirty = true;
-      $("#wf-name").textContent = `${wfSpec!.name} ·`;
-    });
-    wrap.append(input);
-    host.append(wrap);
-  };
-
-  field("id", n.id, (v) => {
-    const from = n.id;
-    n.id = v;
-    for (const e of wfSpec!.edges) {
-      if (e.from === from) e.from = v;
-      if (e.to === from) e.to = v;
-    }
-    wfSelected = v;
-  });
-  field("prompt — {{input}} carries the nodes above", n.prompt, (v) => (n.prompt = v), true);
-  field("model", n.model ?? "", (v) => (n.model = v || undefined));
-  field("effort", n.effort ?? "", (v) => (n.effort = v || undefined));
-  field("working directory", n.cwd ?? "", (v) => (n.cwd = v || undefined));
-  field("fan-out width", String(n.fanout?.width ?? 1), (v) => {
-    const w = Number(v);
-    n.fanout = w > 1 ? { over: "agents", width: w } : undefined;
-  });
-
-  const depends = el("div", { class: "wf-field" }, el("span", {}, "runs after"));
-  const picker = document.createElement("select");
-  picker.multiple = true;
-  picker.size = Math.min(5, Math.max(2, wfSpec.nodes.length));
-  const current = new Set(wfSpec.edges.filter((e) => e.to === n.id).map((e) => e.from));
-  for (const other of wfSpec.nodes) {
-    if (other.id === n.id) continue;
-    const opt = document.createElement("option");
-    opt.value = other.id;
-    opt.textContent = other.id;
-    opt.selected = current.has(other.id);
-    picker.append(opt);
-  }
-  picker.addEventListener("change", () => {
-    const want = new Set([...picker.selectedOptions].map((o) => o.value));
-    wfSpec!.edges = wfSpec!.edges.filter((e) => e.to !== n.id || want.has(e.from));
-    for (const from of want) {
-      if (!wfSpec!.edges.some((e) => e.from === from && e.to === n.id)) {
-        wfSpec!.edges.push({ from, to: n.id, barrier: true, barrierReason: "declared: this step waits for it" });
-      }
-    }
-    wfDirty = true;
-    renderWorkflowBody();
-  });
-  depends.append(picker);
-  host.append(depends);
-
-  const del = el("button", { class: "btn btn-quiet danger" }, "delete node");
-  del.addEventListener("click", () => {
-    wfSpec!.nodes = wfSpec!.nodes.filter((x) => x.id !== n.id);
-    wfSpec!.edges = wfSpec!.edges.filter((e) => e.from !== n.id && e.to !== n.id);
-    wfSelected = wfSpec!.nodes[0]?.id ?? null;
-    wfDirty = true;
-    renderWorkflowBody();
-  });
-  host.append(del);
-
-  const run = (wfRun?.nodes ?? []).filter((r) => r.id === n.id);
-  if (run.length) {
-    const sec = el("div", { class: "wf-runinfo" }, el("h4", {}, "last run"));
-    for (const r of run) {
-      const line = el("div", { class: `wf-runline ${r.state}` });
-      line.textContent =
-        `${r.state}${r.index !== undefined ? ` #${r.index + 1}` : ""}` +
-        `${r.costUsd !== undefined ? ` · ${money(r.costUsd)}` : ""}` +
-        `${r.detail ? ` · ${r.detail}` : ""}`;
-      if (r.output) titledDiv(line, r.output);
-      sec.append(line);
-    }
-    host.append(sec);
-  }
-}
-
-function titledDiv(node: HTMLElement, text: string): void {
-  node.title = text;
-}
-
-function uniqueNodeId(spec: WfSpec): string {
-  for (let i = spec.nodes.length + 1; ; i++) {
-    const id = `step-${i}`;
-    if (!spec.nodes.some((n) => n.id === id)) return id;
-  }
-}
-
-
-/* ---- check, save, run --------------------------------------------------- */
-
-/**
- * Run progress, live.
- *
- * One stream for the whole tab rather than one per run: a run is minutes long
- * and a canvas left open should pick up whatever is happening without being
- * told to look.
- */
-function watchRuns(): void {
-  if (wfStream) return;
-  wfStream = new EventSource("/api/workflows/runs/events");
-  wfStream.onmessage = (m) => {
-    try {
-      const e = JSON.parse(m.data) as
-        | { type: "run"; run: RunState }
-        | { type: "node"; run: string; node: NodeRun };
-      if (e.type === "run") {
-        wfRun = e.run;
-      } else if (wfRun) {
-        // The runner emits a row per child, and a "running" row before them.
-        // Replace the placeholder rather than stacking it up.
-        const at = wfRun.nodes.findIndex(
-          (n) => n.id === e.node.id && (n.index ?? -1) === (e.node.index ?? -1) && n.state === "running",
-        );
-        if (at >= 0) wfRun.nodes[at] = e.node;
-        else wfRun.nodes.push(e.node);
-      } else {
-        wfRun = {
-          id: e.run, workflow: wfSpec?.name ?? "", startedAt: Date.now(),
-          state: "running", nodes: [e.node], detail: "", costUsd: null,
-        };
-      }
-      if (document.body.dataset.view === "workflows") {
-        renderRunStatus();
-        renderWorkflowBody();
-      }
-    } catch {
-      /* a malformed frame is not worth tearing the tab down over */
-    }
-  };
-  wfStream.onerror = () => {
-    $("#wf-status").textContent = "run stream disconnected";
-  };
-}
-
-function renderRunStatus(): void {
-  const el0 = $("#wf-status");
-  if (!wfRun) {
-    el0.textContent = "";
-    return;
-  }
-  const done = wfRun.nodes.filter((n) => n.state === "done").length;
-  const bits = [
-    wfRun.state,
-    `${done}/${wfRun.nodes.length || "?"} done`,
-    wfRun.costUsd === null ? null : money(wfRun.costUsd),
-  ].filter(Boolean);
-  el0.textContent = bits.join(" · ");
-  el0.className = `wf-status ${wfRun.state}`;
-}
-
-/** The report strip under the canvas: what the family said, or why it refused. */
-function wfReport(lines: { level: "ok" | "warn" | "bad"; text: string }[]): void {
-  const host = $("#wf-report");
-  host.textContent = "";
-  host.hidden = !lines.length;
-  for (const l of lines) host.append(el("div", { class: `wf-line ${l.level}` }, l.text));
-}
-
-function wireWorkflows(): void {
-  $("#wf-new").addEventListener("click", () => {
-    wfSpec = {
-      name: `workflow-${Math.random().toString(36).slice(2, 6)}`,
-      description: "",
-      cwd: "",
-      nodes: [{ id: "step-1", prompt: "Describe what this step should do." }],
-      edges: [],
-    };
-    wfSelected = "step-1";
-    wfDirty = true;
-    wfRun = null;
-    renderWorkflowBody();
-  });
-
-  $("#wf-save").addEventListener("click", async () => {
-    if (!wfSpec) return;
-    const r = await fetch(`/api/workflows/${encodeURIComponent(wfSpec.name)}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(wfSpec),
-    });
-    const body = (await r.json()) as { ok?: boolean; detail?: string; problems?: { where?: string; message: string }[] };
-    wfDirty = false;
-    renderWorkflowBody();
-    void renderWorkflows();
-    // Saved even when it does not validate — a draft you cannot save is a
-    // draft you lose — so the problems are reported rather than blocking.
-    wfReport([
-      { level: body.ok ? "ok" : "bad", text: body.detail ?? "saved" },
-      ...(body.problems ?? []).map((p) => ({
-        level: "warn" as const,
-        text: p.where ? `${p.where}: ${p.message}` : p.message,
-      })),
-    ]);
-  });
-
-  $("#wf-check").addEventListener("click", async () => {
-    if (!wfSpec) return;
-    wfReport([{ level: "ok", text: "asking graphlint and preflight…" }]);
-    const r = await fetch(`/api/workflows/${encodeURIComponent(wfSpec.name)}/check`, { method: "POST" });
-    if (!r.ok) return wfReport([{ level: "bad", text: "save it first — check reads the file on disk" }]);
-    const body = (await r.json()) as {
-      problems: { where?: string; message: string }[];
-      lint: { ok: boolean; skipped: boolean; detail: string };
-      budget: { ok: boolean; skipped: boolean; detail: string };
-    };
-    wfReport([
-      ...body.problems.map((p) => ({
-        level: "bad" as const,
-        text: p.where ? `${p.where}: ${p.message}` : p.message,
-      })),
-      { level: body.lint.ok ? (body.lint.skipped ? "warn" : "ok") : "bad", text: body.lint.detail },
-      { level: body.budget.ok ? (body.budget.skipped ? "warn" : "ok") : "bad", text: body.budget.detail },
-    ]);
-  });
-
-  $("#wf-run").addEventListener("click", async () => {
-    if (!wfSpec) return;
-    if (wfDirty) {
-      return wfReport([{ level: "warn", text: "unsaved changes — the runner reads the file on disk, so save first" }]);
-    }
-    wfRun = null;
-    watchRuns();
-    const r = await fetch(`/api/workflows/${encodeURIComponent(wfSpec.name)}/run`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const body = (await r.json()) as { error?: string; detail?: string };
-    wfReport([{ level: r.ok ? "ok" : "bad", text: body.error ?? body.detail ?? "started" }]);
-  });
-}

@@ -46,7 +46,7 @@
  *     overridable with `force`, and both are *skipped rather than assumed* when
  *     the tool is not installed — an absent linter never reads as a clean one.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -58,8 +58,22 @@ import type { FamilyOptions } from "./family.js";
 /** A node of a workflow: one unit of model work, and how to run it. */
 export interface WorkflowNode {
   id: string;
+  /** A human title for the canvas. The id is what edges name; this is what you read. */
+  label?: string;
   /** What to send. `{{input}}` is replaced by the upstream nodes' output. */
   prompt: string;
+  /**
+   * A slash command or skill to send instead of `prompt` — `/review`, `/pdf`.
+   *
+   * Sent as the prompt itself: `claude -p "/review {{input}}"` is exactly how
+   * the CLI takes one, so a command node is a prompt node whose text starts
+   * with a slash. Keeping it as a separate field means the canvas can show
+   * *which* command rather than the first line of it, and the palette can
+   * offer what is actually installed rather than what someone typed.
+   */
+  command?: string;
+  /** What follows the command. `{{input}}` works here too. */
+  args?: string;
   /** Where to run it. Falls back to the workflow's `cwd`. */
   cwd?: string;
   model?: string;
@@ -93,11 +107,35 @@ export interface WorkflowSpec {
   cwd?: string;
   /** Refuse to start when preflight expects to exceed this. */
   budget?: { usd?: number | null; tokens?: number | null };
+  /** Nodes in flight at once. The runner's default is 4. */
+  concurrency?: number;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
 }
 
 export type NodeState = "pending" | "running" | "done" | "failed" | "skipped";
+
+/**
+ * The shape of the graph a run was started from.
+ *
+ * Captured when the run starts and carried with it, because the file it came
+ * from can be edited or deleted while the run is still on the board. A run that
+ * had to look its own workflow up to draw its chain would draw the wrong chain
+ * the moment you fixed a typo in the prompt.
+ */
+export interface RunPlan {
+  cwd?: string;
+  nodes: {
+    id: string;
+    label: string;
+    kind: "prompt" | "command" | "agent";
+    model?: string;
+    agent?: string;
+    command?: string;
+    width: number;
+  }[];
+  edges: { from: string; to: string }[];
+}
 
 /** What happened to one node. One entry per fan-out child. */
 export interface NodeRun {
@@ -114,6 +152,8 @@ export interface NodeRun {
   output?: string;
   /** Why it failed, or which upstream node caused it to be skipped. */
   detail?: string;
+  /** Set on the board's copy, where `output` is stripped, so a card can still offer it. */
+  hasOutput?: boolean;
 }
 
 export interface RunState {
@@ -127,6 +167,8 @@ export interface RunState {
   detail: string;
   /** Sum of what the CLI reported. Null while nothing priced has finished. */
   costUsd: number | null;
+  /** The graph as it was when the run started. */
+  plan?: RunPlan;
   /**
    * Set when this run was read back out of the history archive rather than
    * driven by this process. Such a run is complete but thinner than it was —
@@ -145,6 +187,55 @@ export type RunEvent =
  * ------------------------------------------------------------------------- */
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** `/review`, `review`, `/frontend:component`. The slash is optional and added on send. */
+const COMMAND_RE = /^\/?[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$/;
+
+/**
+ * What a node actually sends.
+ *
+ * A command node sends `/name args`; anything else sends its prompt. This is
+ * the one place the two shapes meet, so a prompt shown on the canvas and the
+ * prompt handed to the CLI cannot drift apart.
+ */
+export function nodePrompt(node: Pick<WorkflowNode, "prompt" | "command" | "args">): string {
+  if (node.command) {
+    const cmd = node.command.startsWith("/") ? node.command : `/${node.command}`;
+    return `${cmd} ${node.args ?? ""}`.trim();
+  }
+  return node.prompt ?? "";
+}
+
+/** What a node is, for a label: the command it runs, the agent it runs as, or a prompt. */
+export function nodeKind(node: Pick<WorkflowNode, "command" | "agent">): RunPlan["nodes"][number]["kind"] {
+  if (node.command) return "command";
+  if (node.agent) return "agent";
+  return "prompt";
+}
+
+/** A title for the canvas and the card: the label, else the command, else the prompt's first line. */
+export function nodeTitle(node: WorkflowNode): string {
+  if (node.label?.trim()) return node.label.trim();
+  if (node.command) return node.command.startsWith("/") ? node.command : `/${node.command}`;
+  const line = (node.prompt ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? node.id;
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line;
+}
+
+/** The snapshot a run carries of the graph it was started from. */
+export function planOf(spec: WorkflowSpec): RunPlan {
+  return {
+    cwd: spec.cwd,
+    nodes: (spec.nodes ?? []).map((n) => ({
+      id: n.id,
+      label: nodeTitle(n),
+      kind: nodeKind(n),
+      model: n.model,
+      agent: n.agent,
+      command: n.command,
+      width: n.fanout?.width ?? 1,
+    })),
+    edges: (spec.edges ?? []).filter((e) => e?.from && e?.to).map((e) => ({ from: e.from, to: e.to })),
+  };
+}
 
 export interface Invalid {
   /** Node or edge the problem belongs to, when it belongs to one. */
@@ -176,7 +267,10 @@ export function validate(spec: WorkflowSpec, ctx: ActionContext = {}): Invalid[]
     if (seen.has(n.id)) bad.push({ where: n.id, message: "declared twice" });
     seen.add(n.id);
 
-    const promptProblem = checkPrompt(n.prompt);
+    if (n.command !== undefined && !COMMAND_RE.test(n.command)) {
+      bad.push({ where: n.id, message: `"${n.command}" is not a slash command name` });
+    }
+    const promptProblem = checkPrompt(nodePrompt(n));
     if (promptProblem) bad.push({ where: n.id, message: promptProblem });
 
     const cwd = n.cwd ?? spec.cwd;
@@ -428,6 +522,7 @@ export async function runWorkflow(spec: WorkflowSpec, opts: RunOptions = {}): Pr
     nodes: [],
     detail: "",
     costUsd: null,
+    plan: spec && typeof spec === "object" ? planOf(spec) : undefined,
   };
   const emit = (e: RunEvent) => opts.onEvent?.(e);
   const finish = (state: RunState["state"], detail: string): RunState => {
@@ -526,7 +621,7 @@ export async function runWorkflow(spec: WorkflowSpec, opts: RunOptions = {}): Pr
           Array.from({ length: width }, (_, i) =>
             (opts.execute ?? ((n, p, k) => runNode(n, p, k, spec, opts)))(
               node,
-              fillPrompt(node.prompt, input, i, width),
+              fillPrompt(nodePrompt(node), input, i, width),
               i,
             ).catch(
               (e): NodeRun => ({
@@ -642,6 +737,19 @@ export function readWorkflow(name: string, dir = workflowsDir()): WorkflowSpec |
     return JSON.parse(readFileSync(path, "utf8")) as WorkflowSpec;
   } catch {
     return null;
+  }
+}
+
+/** Remove one. Same name rule as save, for the same reason. */
+export function deleteWorkflow(name: string, dir = workflowsDir()): { ok: boolean; detail: string } {
+  if (!name || !ID_RE.test(name)) return { ok: false, detail: "name must be letters, digits, dot, dash or underscore" };
+  const path = join(dir, `${name}.graph.json`);
+  if (!existsSync(path)) return { ok: false, detail: `no workflow called "${name}"` };
+  try {
+    unlinkSync(path);
+    return { ok: true, detail: `deleted ${path}` };
+  } catch (e) {
+    return { ok: false, detail: `could not delete ${path}: ${(e as Error).message}` };
   }
 }
 
