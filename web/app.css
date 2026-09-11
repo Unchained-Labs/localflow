@@ -374,7 +374,16 @@ body[data-view="workflows"] .board { display: none; }
 body[data-view="metrics"] .board,
 body[data-view="sessions"] .board { display: none; }
 .sessions { display: none; padding: var(--ul-space-4); }
-body[data-view="sessions"] .sessions { display: block; }
+/* #sessions and #devices both carry .sessions and are shown together; the
+   archive is its own view and must not come along. */
+body[data-view="sessions"] .sessions:not(#history) { display: block; }
+body[data-view="history"] #history { display: block; }
+body[data-view="history"] .board { display: none; }
+.hist-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.hist-controls .input { flex: 1 1 220px; }
+.hist-controls select.input { flex: 0 0 auto; }
+/* A date the archive inferred from the file clock, not the transcript. */
+.hist-approx { opacity: 0.65; }
 
 .stat-row { display: flex; flex-wrap: wrap; gap: var(--ul-space-3); }
 .stat {

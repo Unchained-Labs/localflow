@@ -63,6 +63,7 @@ import { identityFor } from "./agents/identity.js";
 import type { SourceIdentity } from "./agents/identity.js";
 import { loadSources } from "./agents/jsonl.js";
 import { listSessions } from "./sessions.js";
+import { Archive, readHistory } from "./history.js";
 import { countTasks, createTask, readTasks, setTaskStatus } from "./tasks.js";
 import type { TaskStatus } from "./tasks.js";
 import type { BoardSummary, Task } from "./types.js";
@@ -76,6 +77,19 @@ export interface ServerOptions extends BoardOptions {
   allowedRoots?: string[];
   /** Board refresh interval, milliseconds. */
   pollMs?: number;
+  /**
+   * Write every observed job to the append-only archive under ~/.localflow/history.
+   *
+   * On by default, which is a deliberate reversal of this file's usual bias
+   * toward off. Everything else that defaults off here grants a permission —
+   * to start a process, to reach another machine. This one only writes a few
+   * hundred kilobytes a month to the user's own home directory, and the cost
+   * of having it off is not paid until months later, when the transcripts it
+   * would have copied are already deleted and the history is unrecoverable.
+   */
+  archive?: boolean;
+  /** Where the archive lives. Defaults to LOCALFLOW_HOME or ~/.localflow. */
+  archiveHome?: string;
   /** Directory holding the built UI. */
   webRoot?: string;
   /**
@@ -193,13 +207,20 @@ export class LocalflowServer {
   private readonly registry = new AdapterRegistry();
 
   /**
-   * Runs this process started, newest last.
+   * Runs, newest last: the live ones this process is driving, plus whatever the
+   * archive remembers of earlier ones.
    *
-   * In memory: a run is a live thing with a stream attached, and it belongs to
-   * the process that is doing it. The sessions it creates are on disk like any
-   * others, so what survives a restart is the work rather than the bookkeeping.
+   * A running workflow is a live thing with a stream attached and belongs to the
+   * process doing it — that part is unchanged. What changed is the end of it: a
+   * finished run used to vanish with the process, so "which workflows have I
+   * ever run" had no answer at all. Terminal runs are now written down, and this
+   * map is seeded from that record at startup, so a restart costs you the live
+   * stream rather than the history.
    */
   private readonly runs = new Map<string, RunState>();
+
+  /** The append-only job log. Null when archiving is off. */
+  private readonly archive: Archive | null;
 
   /** Listeners on /api/workflows/runs/events, one per open canvas. */
   private readonly runWatchers = new Set<ServerResponse>();
@@ -223,6 +244,7 @@ export class LocalflowServer {
   constructor(opts: ServerOptions = {}) {
     this.opts = { port: 7317, host: "127.0.0.1", pollMs: 2_000, ...opts };
     this.board = new Board(opts);
+    this.archive = this.opts.archive === false ? null : new Archive(this.opts.archiveHome);
     // Declared sources are read once at construction. Editing sources.json is
     // a restart, which is the right cost for a file that changes about as often
     // as you install a new agent CLI.
@@ -238,6 +260,8 @@ export class LocalflowServer {
   }
 
   async start(): Promise<{ url: string }> {
+    this.restoreRuns();
+    this.seedArchive();
     if (this.opts.watchRemote) await this.pollFleet();
     await this.refresh();
     this.timer = setInterval(() => void this.refresh(), this.opts.pollMs);
@@ -289,6 +313,67 @@ export class LocalflowServer {
     }
   }
 
+  /**
+   * Fold the transcripts already on disk into an empty archive, once.
+   *
+   * Only when it is empty, and never blocking: the archive is meant to be
+   * switched on and forgotten, and a first run that starts recording from
+   * today while three weeks of readable transcripts sit next to it would be
+   * a gap nobody asked for and nobody could fill in later. Deliberately not
+   * awaited — the board is up in milliseconds and this is a one-off parse of
+   * a directory that may be large.
+   */
+  private seedArchive(): void {
+    if (!this.archive) return;
+    void (async () => {
+      try {
+        if (readHistory({ limit: 1 }, this.opts.archiveHome).coverage.rows > 0) return;
+        const { backfill } = await import("./history.js");
+        await backfill({ ...this.opts, home: this.opts.archiveHome });
+      } catch {
+        // Seeding is a convenience. Failing at it must not stop the board,
+        // which is already recording everything from here forward anyway.
+      }
+    })();
+  }
+
+  /**
+   * Put finished runs back on the canvas after a restart.
+   *
+   * Bounded, and newest-first: the archive is allowed to be a year deep, the
+   * in-memory map is not. Anything older than this window is still in the
+   * ledger and still answerable over /api/history — it is just not sitting in
+   * RAM waiting to be asked for.
+   */
+  private restoreRuns(limit = 100): void {
+    if (!this.archive) return;
+    try {
+      const { runs } = readHistory({ limit }, this.opts.archiveHome);
+      for (const r of runs) {
+        if (this.runs.has(r.id)) continue;
+        this.runs.set(r.id, {
+          id: r.id,
+          workflow: r.workflow,
+          startedAt: r.startedAt,
+          endedAt: r.endedAt,
+          state: r.state,
+          detail: r.detail,
+          costUsd: r.costUsd,
+          restored: true,
+          nodes: r.nodes.map((n) => ({
+            id: n.id,
+            state: n.state as never,
+            sessionId: n.sessionId,
+            costUsd: n.costUsd ?? undefined,
+          })),
+        });
+      }
+    } catch (e) {
+      // An unreadable archive must not stop the board from starting.
+      this.lastError = "could not restore run history: " + (e as Error).message;
+    }
+  }
+
   private async refresh(): Promise<void> {
     try {
       const summary = await this.board.poll();
@@ -323,6 +408,14 @@ export class LocalflowServer {
             summarise([...summary.tasks, ...remoteTasks], summary.degraded, this.opts.asOf),
           );
         }
+      }
+
+      // Write before publishing: the archive is the only copy that outlives the
+      // transcripts these cards were parsed from, and a poll that renders but
+      // does not record is the one whose data is gone in thirty days.
+      if (this.archive) {
+        this.archive.record(summary.tasks);
+        if (this.archive.error) summary.degraded.push({ id: "history", reason: this.archive.error });
       }
 
       this.latest = summary;
@@ -414,6 +507,38 @@ export class LocalflowServer {
         })),
       );
       return send(res, 200, { ...metrics, water });
+    }
+
+    if (url.pathname === "/api/history") {
+      if (!this.archive) return send(res, 404, { error: "archiving is off; restart without --no-archive" });
+      const num = (k: string): number | undefined => {
+        const raw = url.searchParams.get(k);
+        if (raw === null) return undefined;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      // "days" is the form anyone actually wants; "since" stays for exact windows.
+      const days = num("days");
+      const since = days !== undefined ? Date.now() - days * 86_400_000 : num("since");
+      const result = readHistory(
+        {
+          since,
+          until: num("until"),
+          project: url.searchParams.get("project") ?? undefined,
+          source: url.searchParams.get("source") ?? undefined,
+          limit: num("limit") ?? 500,
+        },
+        this.opts.archiveHome,
+      );
+      return send(res, 200, {
+        ...result,
+        // Said out loud, per the rule burn.ts set: a window the archive does not
+        // reach back into yields a floor, and a floor that does not admit it is
+        // just a wrong total.
+        note: result.partial
+          ? "the requested window starts before the archive does — these totals are a floor, not a total"
+          : undefined,
+      });
     }
 
     if (url.pathname === "/api/devices") return await this.devices(res);
@@ -632,7 +757,12 @@ export class LocalflowServer {
           if (e.type === "run") this.runs.set(e.run.id, e.run);
           this.publishRun(e);
         },
-      }).then((final) => this.runs.set(final.id, final));
+      }).then((final) => {
+        this.runs.set(final.id, final);
+        // Terminal only. A row per event would make the ledger a transcript of
+        // the run rather than a record that it happened.
+        this.archive?.recordRun(final);
+      });
       return send(res, 202, { runId, detail: "started; watch /api/workflows/runs/events" });
     }
 

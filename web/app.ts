@@ -1412,7 +1412,7 @@ void init();
  * streaming them would be a lot of bytes to redraw a chart that looks the same.
  * ------------------------------------------------------------------------- */
 
-type View = "board" | "workflows" | "metrics" | "sessions";
+type View = "board" | "workflows" | "metrics" | "sessions" | "history";
 
 interface Slice { key: string; sessions: number; usage: Usage; costUsd: number | null; unpriced: number }
 interface WaterTriple { low: number; mid: number; high: number }
@@ -1874,7 +1874,154 @@ async function renderSessions(query = ""): Promise<void> {
   body.append(note);
 }
 
-const VIEWS: readonly View[] = ["board", "workflows", "metrics", "sessions"] as const;
+interface ArchivedSession {
+  id: string; title: string; cwd: string; source: string; lane: string;
+  startedAt: number; updatedAt: number; turns: number; costUsd: number | null;
+  usage: Usage; toolErrors: number; fanouts: number;
+  timeFrom?: "mtime";
+}
+interface ArchivedRun {
+  id: string; workflow: string; startedAt: number; endedAt?: number;
+  state: string; detail: string; costUsd: number | null;
+}
+interface HistoryPayload {
+  sessions: ArchivedSession[];
+  runs: ArchivedRun[];
+  totals: { sessions: number; runs: number; turns: number; tokens: number; costUsd: number | null; unpriced: number; projects: number };
+  matched: { sessions: number; runs: number };
+  coverage: { from: number | null; to: number | null; rows: number; files: number; unreadable: number };
+  partial: boolean;
+  note?: string;
+  error?: string;
+}
+
+const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+/**
+ * The archive view.
+ *
+ * Deliberately the only place on this board that shows work whose transcript no
+ * longer exists, and deliberately the only place that states how far back it can
+ * answer for. Every other panel is a window onto files that are still there; this
+ * one is a claim about the past, so it carries its own coverage.
+ */
+async function renderHistory(): Promise<void> {
+  const body = $("#hist-body");
+  body.textContent = "loading…";
+  const days = ($("#hist-days") as HTMLSelectElement).value;
+  const q = ($("#hist-q") as HTMLInputElement).value;
+
+  let data: HistoryPayload;
+  try {
+    const params = new URLSearchParams({ limit: "400" });
+    if (days) params.set("days", days);
+    if (q) params.set("project", q);
+    data = await (await fetch(`/api/history?${params}`)).json();
+  } catch (e) {
+    body.textContent = `could not read the archive: ${String(e)}`;
+    return;
+  }
+  body.textContent = "";
+
+  if (data.error) {
+    body.append(el("p", { className: "blurb", textContent: data.error }));
+    return;
+  }
+
+  if (!data.coverage.rows) {
+    body.append(
+      el("p", {
+        className: "blurb",
+        textContent:
+          "Nothing archived yet. localflow starts recording as soon as it is running, and seeds " +
+          "itself once from the transcripts still on disk — so this fills in shortly after a first start. " +
+          "`localflow history backfill` does the same thing on demand.",
+      }),
+    );
+    return;
+  }
+
+  const t = data.totals;
+  const stats = el("div", { className: "stat-row" });
+  stats.append(
+    statTile("Jobs", String(t.sessions), t.projects === 1 ? "1 project" : `${t.projects} projects`),
+    statTile("Workflow runs", String(t.runs)),
+    statTile("Turns", String(t.turns)),
+    statTile("Tokens", tokens(t.tokens)),
+    statTile(
+      "Spent",
+      money(t.costUsd),
+      // Never silently fold unpriced work into a total. Otter's rule, kept.
+      t.unpriced ? `${t.unpriced} unpriced — a floor` : undefined,
+    ),
+  );
+  body.append(stats);
+
+  const covers =
+    data.coverage.from && data.coverage.to
+      ? `Archive covers ${day(data.coverage.from)} to ${day(data.coverage.to)}, across ${data.coverage.rows} recorded observation${data.coverage.rows === 1 ? "" : "s"}.`
+      : "The archive holds no dated work yet.";
+  body.append(
+    el("p", {
+      className: "blurb",
+      textContent: data.partial
+        ? `${covers} The window you asked for starts before that, so these totals are a floor rather than a total.`
+        : covers,
+    }),
+  );
+
+  const table = el("table", { className: "sess-table" });
+  table.innerHTML =
+    "<thead><tr><th>last active</th><th>job</th><th>where</th><th>turns</th><th>tokens</th><th>cost</th></tr></thead>";
+  const tbody = el("tbody");
+
+  for (const x of data.sessions) {
+    const tr = el("tr");
+    const when = el("td", { textContent: day(x.updatedAt) });
+    if (x.timeFrom === "mtime") {
+      when.className = "hist-approx";
+      when.title = "This session recorded no timestamp of its own; the date comes from the transcript file.";
+    }
+    tr.append(when);
+    tr.append(el("td", { textContent: x.title }));
+    tr.append(el("td", { textContent: tilde(x.cwd) }));
+    tr.append(el("td", { textContent: String(x.turns) }));
+    tr.append(el("td", { textContent: tokens(x.usage.input + x.usage.output + x.usage.cacheRead) }));
+    tr.append(el("td", { textContent: money(x.costUsd) }));
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  body.append(table);
+
+  if (data.runs.length) {
+    body.append(el("h4", { textContent: "Workflow runs" }));
+    const rt = el("table", { className: "sess-table" });
+    rt.innerHTML = "<thead><tr><th>started</th><th>workflow</th><th>outcome</th><th>cost</th></tr></thead>";
+    const rb = el("tbody");
+    for (const r of data.runs) {
+      const tr = el("tr");
+      tr.append(el("td", { textContent: day(r.startedAt) }));
+      tr.append(el("td", { textContent: r.workflow }));
+      tr.append(el("td", { textContent: r.detail ? `${r.state} — ${r.detail}` : r.state }));
+      tr.append(el("td", { textContent: money(r.costUsd) }));
+      rb.append(tr);
+    }
+    rt.append(rb);
+    body.append(rt);
+  }
+
+  const shown = data.sessions.length;
+  if (shown < data.matched.sessions) {
+    body.append(
+      el("p", {
+        className: "blurb",
+        textContent: `Showing the ${shown} most recent of ${data.matched.sessions} matching jobs — the totals above count all of them.`,
+      }),
+    );
+  }
+}
+
+const VIEWS: readonly View[] = ["board", "workflows", "metrics", "sessions", "history"] as const;
 
 /**
  * Which view the URL is asking for.
@@ -1915,6 +2062,7 @@ function setView(view: View, history_: HistoryMode = "push"): void {
   if (view === "workflows") void renderWorkflows();
   if (view === "metrics") void renderMetrics();
   if (view === "sessions") void renderSessions(($("#sess-q") as HTMLInputElement).value);
+  if (view === "history") void renderHistory();
 }
 
 function wireViews(): void {
@@ -1925,6 +2073,12 @@ function wireViews(): void {
   // Back, Forward, and someone editing the hash by hand.
   addEventListener("popstate", () => setView(viewFromLocation(), "none"));
   addEventListener("hashchange", () => setView(viewFromLocation(), "none"));
+  $("#hist-days").addEventListener("change", () => void renderHistory());
+  let histTimer: ReturnType<typeof setTimeout> | undefined;
+  $("#hist-q").addEventListener("input", () => {
+    clearTimeout(histTimer);
+    histTimer = setTimeout(() => void renderHistory(), 200);
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   $("#sess-q").addEventListener("input", (e) => {
     clearTimeout(timer);

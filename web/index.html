@@ -24,6 +24,7 @@
       <button class="btn view-btn" data-view="workflows" role="tab" aria-selected="false">Workflows</button>
       <button class="btn view-btn" data-view="metrics" role="tab" aria-selected="false">Metrics</button>
       <button class="btn view-btn" data-view="sessions" role="tab" aria-selected="false">Sessions</button>
+      <button class="btn view-btn" data-view="history" role="tab" aria-selected="false">History</button>
     </nav>
     <span class="pill" id="mode" title="Actions are off unless localflow was started with --allow-actions">read-only</span>
     <span class="pill live" id="live"><i></i>connecting</span>
@@ -78,6 +79,29 @@
     </p>
     <input id="sess-q" class="input" type="search" placeholder="filter by id, path or name" aria-label="Filter sessions">
     <div id="sess-body"></div>
+  </div>
+</section>
+
+<section id="history" class="sessions" aria-label="Every job ever archived">
+  <div class="panel">
+    <h3>Every job, ever</h3>
+    <p class="blurb">
+      The board is derived from transcripts, and Claude Code deletes those on its own
+      schedule — so a session older than your retention window is not hidden here, it is
+      gone. This is the copy localflow keeps as it watches, in
+      <code>~/.localflow/history</code>. It outlives the transcripts it was read from,
+      which also means it can only answer for the time it was running.
+    </p>
+    <div class="hist-controls">
+      <select id="hist-days" class="input" aria-label="Window">
+        <option value="">everything</option>
+        <option value="7">last 7 days</option>
+        <option value="30">last 30 days</option>
+        <option value="90">last 90 days</option>
+      </select>
+      <input id="hist-q" class="input" type="search" placeholder="filter by project path" aria-label="Filter history by project">
+    </div>
+    <div id="hist-body"></div>
   </div>
 </section>
 
